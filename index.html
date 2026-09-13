@@ -7,7 +7,7 @@
     content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no"
   />
   <meta name="theme-color" content="#090909" />
-  <title>Mobility Dodge</title>
+  <title>Mobility Dodge — Segmentation Mask</title>
 
   <style>
     * {
@@ -105,8 +105,8 @@
     }
 
     #camera-permission {
-      padding: 13px 18px;
       min-width: 190px;
+      padding: 13px 18px;
       border: 0;
       border-radius: 10px;
       background: #55e6ff;
@@ -143,7 +143,7 @@
         <h1>Mobility Dodge</h1>
 
         <p id="permission-message">
-          Allow access to your camera to continue.
+          Allow camera access to create your live body silhouette.
         </p>
 
         <button id="camera-permission" type="button">
@@ -154,13 +154,6 @@
   </main>
 
   <script>
-    /*
-      This first script is deliberately NOT a module.
-
-      It attaches the click listener immediately, before loading
-      MediaPipe. That means a CDN or MediaPipe error cannot stop
-      the browser camera permission request.
-    */
     (() => {
       const video = document.getElementById("video");
       const canvas = document.getElementById("canvas");
@@ -171,11 +164,23 @@
       const permissionMessage = document.getElementById("permission-message");
       const permissionButton = document.getElementById("camera-permission");
 
+      /*
+        A small offscreen canvas holds the current mask.
+        It is not added to the page.
+      */
+      const maskCanvas = document.createElement("canvas");
+      const maskCtx = maskCanvas.getContext(
+        "2d",
+        { willReadFrequently: true }
+      );
+
       let mediaStream = null;
       let poseLandmarker = null;
       let poseLoading = false;
 
       let lastVideoTime = -1;
+      let lastSegmentationAt = 0;
+
       let running = false;
       let gameOver = false;
 
@@ -184,12 +189,47 @@
       let projectile = null;
       let lastSpawnTime = 0;
 
+      /*
+        20 FPS for mask inference. The normal draw loop remains
+        requestAnimationFrame speed.
+      */
+      const segmentationIntervalMs = 50;
+
+      /*
+        Person-mask confidence threshold. Raise this when the mask
+        includes too much background; lower it if the silhouette
+        becomes too fragmented.
+      */
+      const maskThreshold = 0.55;
+
+      /*
+        Persist the last valid silhouette briefly to avoid flicker
+        if MediaPipe misses one video frame.
+      */
+      const trackingGraceMs = 650;
+
       const player = {
-        x: window.innerWidth / 2,
-        y: window.innerHeight / 2,
-        radiusX: 75,
-        radiusY: 100,
-        tracked: false
+        tracked: false,
+        lastTrackedAt: 0,
+
+        /*
+          This is a binary Uint8Array:
+          255 = player pixel
+          0 = background
+        */
+        pixels: null,
+
+        width: 0,
+        height: 0,
+
+        /*
+          Screen-space bounding rectangle of active body pixels.
+          Used only to make collision work faster.
+        */
+        minX: 0,
+        minY: 0,
+        maxX: 0,
+        maxY: 0
       };
 
       function resizeCanvas() {
@@ -202,11 +242,21 @@
         canvas.style.height = `${window.innerHeight}px`;
 
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
 
-        if (!player.tracked) {
-          player.x = window.innerWidth / 2;
-          player.y = window.innerHeight / 2;
-        }
+      function resetPlayerMask() {
+        player.tracked = false;
+        player.lastTrackedAt = 0;
+        player.pixels = null;
+        player.width = 0;
+        player.height = 0;
+        player.minX = 0;
+        player.minY = 0;
+        player.maxX = 0;
+        player.maxY = 0;
+
+        maskCanvas.width = 1;
+        maskCanvas.height = 1;
       }
 
       function resetGame() {
@@ -214,14 +264,12 @@
         health = 3;
         projectile = null;
         lastSpawnTime = performance.now();
+
         lastVideoTime = -1;
+        lastSegmentationAt = 0;
         loop.lastTime = undefined;
 
-        player.x = window.innerWidth / 2;
-        player.y = window.innerHeight / 2;
-        player.radiusX = 75;
-        player.radiusY = 100;
-        player.tracked = false;
+        resetPlayerMask();
 
         gameOver = false;
       }
@@ -236,25 +284,24 @@
 
         if (!window.isSecureContext) {
           message =
-            "Camera access needs HTTPS. Open your GitHub Pages URL, not a downloaded file or an HTTP address.";
+            "Camera access requires HTTPS. Open your GitHub Pages URL, not a downloaded file or HTTP address.";
         } else if (!navigator.mediaDevices?.getUserMedia) {
           message =
             "This browser does not support camera access through MediaDevices.";
         } else if (error?.name === "NotAllowedError") {
           message =
-            "The browser blocked camera access. Click the camera or lock icon in the address bar, allow the camera for this site, then try again.";
+            "Camera permission was blocked. Use the camera or lock icon in the address bar, allow the camera for this site, then try again.";
         } else if (error?.name === "NotFoundError") {
           message =
             "No usable camera was found on this device.";
         } else if (error?.name === "NotReadableError") {
           message =
-            "The camera is busy. Close other apps or browser tabs using it, then try again.";
-        } else if (error?.name === "OverconstrainedError") {
-          message =
-            "This camera does not match the requested settings. Try again.";
+            "The camera is in use by another app or browser tab.";
         } else {
           message =
-            `Camera could not start: ${error?.message || error?.name || "Unknown error"}`;
+            `Camera could not start: ${
+              error?.message || error?.name || "Unknown error"
+            }`;
         }
 
         permissionMessage.textContent = message;
@@ -262,11 +309,6 @@
       }
 
       async function enableCamera(event) {
-        /*
-          getUserMedia happens immediately in this actual click event.
-          Do not await imports, timers, or tracking initialization
-          before this line.
-        */
         event.preventDefault();
 
         if (mediaStream) {
@@ -291,12 +333,13 @@
         try {
           permissionButton.disabled = true;
           permissionButton.textContent = "Requesting Access…";
+
           permissionMessage.textContent =
             "Your browser should now display its camera permission dialog.";
 
           /*
-            Keep this call simple. Some devices reject strict
-            facingMode or resolution requirements.
+            Call this directly from the button event. Browser camera
+            permission prompts require a real user gesture.
           */
           const stream = await navigator.mediaDevices.getUserMedia({
             video: true,
@@ -309,12 +352,13 @@
           await video.play();
 
           resetGame();
-          running = true;
 
           permissionPanel.classList.add("hidden");
 
           info.textContent =
-            "Camera active. Yellow zone is active while tracking loads.";
+            "Camera active. Loading body segmentation…";
+
+          running = true;
 
           requestAnimationFrame(loop);
 
@@ -355,28 +399,141 @@
                 delegate: "CPU"
               },
               runningMode: "VIDEO",
-              numPoses: 1
+              numPoses: 1,
+
+              /*
+                This enables result.segmentationMasks.
+              */
+              outputSegmentationMasks: true,
+
+              minPoseDetectionConfidence: 0.55,
+              minPosePresenceConfidence: 0.55,
+              minTrackingConfidence: 0.55
             }
           );
 
           info.textContent =
-            "Camera active. Pose tracking is ready.";
+            "Segmentation ready. Stand in view to activate your body silhouette.";
 
         } catch (error) {
-          console.warn("Pose tracking unavailable:", error);
+          console.warn("Body segmentation could not load:", error);
 
-          /*
-            The game continues using the centered yellow zone.
-          */
           info.textContent =
-            "Camera active. Tracking unavailable; using yellow center zone.";
+            "Camera active, but body segmentation could not load.";
 
         } finally {
           poseLoading = false;
         }
       }
 
-      function updatePersonZone(timestamp) {
+      function clearPlayerMask() {
+        player.tracked = false;
+        player.pixels = null;
+        player.width = 0;
+        player.height = 0;
+        player.minX = 0;
+        player.minY = 0;
+        player.maxX = 0;
+        player.maxY = 0;
+      }
+
+      /*
+        Convert MediaPipe's single-channel confidence mask into:
+        1. a binary hit-test array
+        2. a green RGBA image for drawing
+        3. an active-pixel bounding box for fast rejection
+
+        The video is mirrored in CSS. Therefore the code mirrors
+        mask X values while writing to the screen-aligned mask.
+      */
+      function updatePlayerMask(mask) {
+        const sourceWidth = mask.width;
+        const sourceHeight = mask.height;
+
+        if (!sourceWidth || !sourceHeight) {
+          clearPlayerMask();
+          return;
+        }
+
+        /*
+          MPMask can provide a Float32Array with person confidence
+          values. Copy it immediately while the result is valid.
+        */
+        const confidence = mask.getAsFloat32Array();
+
+        const binary = new Uint8Array(
+          sourceWidth * sourceHeight
+        );
+
+        const rgba = new Uint8ClampedArray(
+          sourceWidth * sourceHeight * 4
+        );
+
+        let minX = sourceWidth;
+        let minY = sourceHeight;
+        let maxX = -1;
+        let maxY = -1;
+
+        for (let y = 0; y < sourceHeight; y += 1) {
+          for (let x = 0; x < sourceWidth; x += 1) {
+            const sourceIndex = y * sourceWidth + x;
+
+            /*
+              Store the mirrored value. This aligns it with the
+              CSS-mirrored video and screen-space projectile logic.
+            */
+            const mirroredX = sourceWidth - 1 - x;
+
+            const targetIndex =
+              y * sourceWidth + mirroredX;
+
+            const value = confidence[sourceIndex];
+
+            if (value >= maskThreshold) {
+              binary[targetIndex] = 255;
+
+              const colorIndex = targetIndex * 4;
+
+              rgba[colorIndex] = 82;
+              rgba[colorIndex + 1] = 255;
+              rgba[colorIndex + 2] = 183;
+              rgba[colorIndex + 3] = 150;
+
+              if (mirroredX < minX) minX = mirroredX;
+              if (mirroredX > maxX) maxX = mirroredX;
+              if (y < minY) minY = y;
+              if (y > maxY) maxY = y;
+            }
+          }
+        }
+
+        if (maxX < minX || maxY < minY) {
+          clearPlayerMask();
+          return;
+        }
+
+        maskCanvas.width = sourceWidth;
+        maskCanvas.height = sourceHeight;
+
+        const imageData = new ImageData(
+          rgba,
+          sourceWidth,
+          sourceHeight
+        );
+
+        maskCtx.putImageData(imageData, 0, 0);
+
+        player.pixels = binary;
+        player.width = sourceWidth;
+        player.height = sourceHeight;
+        player.minX = minX;
+        player.minY = minY;
+        player.maxX = maxX;
+        player.maxY = maxY;
+        player.tracked = true;
+      }
+
+      function updateSegmentation(timestamp) {
         if (
           !poseLandmarker ||
           video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
@@ -384,52 +541,69 @@
           return;
         }
 
+        if (timestamp - lastSegmentationAt < segmentationIntervalMs) {
+          return;
+        }
+
         if (video.currentTime === lastVideoTime) {
           return;
         }
 
+        lastSegmentationAt = timestamp;
         lastVideoTime = video.currentTime;
 
-        const result = poseLandmarker.detectForVideo(
-          video,
-          timestamp
-        );
+        let result = null;
 
-        if (!result.landmarks?.length) {
-          player.tracked = false;
-          return;
+        try {
+          result = poseLandmarker.detectForVideo(
+            video,
+            timestamp
+          );
+
+          const mask = result.segmentationMasks?.[0];
+
+          if (!mask) {
+            if (
+              timestamp - player.lastTrackedAt >
+              trackingGraceMs
+            ) {
+              clearPlayerMask();
+            }
+
+            return;
+          }
+
+          updatePlayerMask(mask);
+
+          if (player.tracked) {
+            player.lastTrackedAt = timestamp;
+          }
+
+        } catch (error) {
+          console.warn("Segmentation frame failed:", error);
+        } finally {
+          /*
+            MediaPipe MPMask objects own native/WASM resources.
+            Close the result masks once their values have been copied.
+          */
+          if (result?.segmentationMasks) {
+            result.segmentationMasks.forEach((resultMask) => {
+              if (typeof resultMask.close === "function") {
+                resultMask.close();
+              }
+            });
+          }
         }
-
-        const points = result.landmarks[0];
-
-        const nose = points[0];
-        const leftShoulder = points[11];
-        const rightShoulder = points[12];
-
-        if (!nose || !leftShoulder || !rightShoulder) {
-          player.tracked = false;
-          return;
-        }
-
-        const shoulderWidth = Math.hypot(
-          rightShoulder.x - leftShoulder.x,
-          rightShoulder.y - leftShoulder.y
-        );
-
-        const bodyWidth = shoulderWidth * window.innerWidth;
-
-        /*
-          Video uses scaleX(-1), so invert the ML X position.
-        */
-        player.x = (1 - nose.x) * window.innerWidth;
-        player.y = nose.y * window.innerHeight;
-
-        player.radiusX = Math.max(55, bodyWidth * 0.62);
-        player.radiusY = Math.max(80, bodyWidth * 0.98);
-        player.tracked = true;
       }
 
       function spawnProjectile() {
+        /*
+          No body silhouette means no dangerous projectile.
+        */
+        if (!player.tracked || !player.pixels) {
+          return;
+        }
+
         const fromLeft = Math.random() > 0.5;
 
         const startX = fromLeft
@@ -441,8 +615,18 @@
           Math.random() *
           Math.max(80, window.innerHeight - 160);
 
-        const dx = player.x - startX;
-        const dy = player.y - startY;
+        /*
+          Choose a random active body-mask pixel as the warning target.
+        */
+        const target = randomBodyPoint();
+
+        if (!target) {
+          return;
+        }
+
+        const dx = target.x - startX;
+        const dy = target.y - startY;
+
         const length = Math.hypot(dx, dy) || 1;
         const speed = 500;
 
@@ -451,8 +635,8 @@
           y: startY,
           vx: (dx / length) * speed,
           vy: (dy / length) * speed,
-          targetX: player.x,
-          targetY: player.y,
+          targetX: target.x,
+          targetY: target.y,
           radius: 16,
           createdAt: performance.now(),
           warningTime: 700,
@@ -460,16 +644,121 @@
         };
       }
 
-      function circleHitsZone(circle, zone) {
-        const radiusX = zone.radiusX + circle.radius;
-        const radiusY = zone.radiusY + circle.radius;
+      function randomBodyPoint() {
+        if (!player.pixels || !player.tracked) {
+          return null;
+        }
 
-        const dx = circle.x - zone.x;
-        const dy = circle.y - zone.y;
+        /*
+          Try random pixels inside the active bounding box.
+          This is much cheaper than rebuilding a full list every frame.
+        */
+        for (let attempt = 0; attempt < 80; attempt += 1) {
+          const maskX =
+            player.minX +
+            Math.floor(
+              Math.random() *
+              (player.maxX - player.minX + 1)
+            );
 
-        return (
-          (dx * dx) / (radiusX * radiusX) +
-          (dy * dy) / (radiusY * radiusY) <= 1
+          const maskY =
+            player.minY +
+            Math.floor(
+              Math.random() *
+              (player.maxY - player.minY + 1)
+            );
+
+          const index =
+            maskY * player.width + maskX;
+
+          if (player.pixels[index] === 255) {
+            return {
+              x: ((maskX + 0.5) / player.width) *
+                window.innerWidth,
+
+              y: ((maskY + 0.5) / player.height) *
+                window.innerHeight
+            };
+          }
+        }
+
+        /*
+          A fallback point in the center of the body bounding box.
+        */
+        return {
+          x:
+            ((player.minX + player.maxX + 1) /
+              (2 * player.width)) *
+            window.innerWidth,
+
+          y:
+            ((player.minY + player.maxY + 1) /
+              (2 * player.height)) *
+            window.innerHeight
+        };
+      }
+
+      function bodyMaskContainsScreenPoint(screenX, screenY) {
+        if (
+          !player.tracked ||
+          !player.pixels ||
+          player.width <= 0 ||
+          player.height <= 0
+        ) {
+          return false;
+        }
+
+        const maskX = Math.floor(
+          (screenX / window.innerWidth) * player.width
+        );
+
+        const maskY = Math.floor(
+          (screenY / window.innerHeight) * player.height
+        );
+
+        if (
+          maskX < 0 ||
+          maskX >= player.width ||
+          maskY < 0 ||
+          maskY >= player.height
+        ) {
+          return false;
+        }
+
+        const index =
+          maskY * player.width + maskX;
+
+        return player.pixels[index] === 255;
+      }
+
+      function projectileHitsBody(projectileObject) {
+        if (!player.tracked || !player.pixels) {
+          return false;
+        }
+
+        /*
+          Center plus eight perimeter samples makes projectile
+          collision more forgiving than a one-pixel point test.
+        */
+        const radius = projectileObject.radius;
+
+        const samples = [
+          [0, 0],
+          [radius, 0],
+          [-radius, 0],
+          [0, radius],
+          [0, -radius],
+          [radius * 0.7, radius * 0.7],
+          [-radius * 0.7, radius * 0.7],
+          [radius * 0.7, -radius * 0.7],
+          [-radius * 0.7, -radius * 0.7]
+        ];
+
+        return samples.some(([offsetX, offsetY]) =>
+          bodyMaskContainsScreenPoint(
+            projectileObject.x + offsetX,
+            projectileObject.y + offsetY
+          )
         );
       }
 
@@ -486,6 +775,10 @@
 
       function updateProjectile(timestamp, deltaMs) {
         if (!projectile) {
+          if (!player.tracked) {
+            return;
+          }
+
           if (timestamp - lastSpawnTime > 1300) {
             spawnProjectile();
             lastSpawnTime = timestamp;
@@ -495,7 +788,10 @@
         }
 
         if (!projectile.fired) {
-          if (timestamp - projectile.createdAt >= projectile.warningTime) {
+          if (
+            timestamp - projectile.createdAt >=
+            projectile.warningTime
+          ) {
             projectile.fired = true;
           }
 
@@ -507,7 +803,10 @@
         projectile.x += projectile.vx * dt;
         projectile.y += projectile.vy * dt;
 
-        if (circleHitsZone(projectile, player)) {
+        /*
+          Only green segmentation-mask pixels can take damage.
+        */
+        if (projectileHitsBody(projectile)) {
           health -= 1;
           projectile = null;
 
@@ -528,59 +827,53 @@
         }
       }
 
-      function drawPlayerZone() {
-        const color = player.tracked ? "#52ffb7" : "#ffe66d";
-
-        const label = player.tracked
-          ? "PLAYER HIT ZONE"
-          : "DEFAULT HIT ZONE";
+      function drawBodyMask() {
+        if (!player.tracked || !player.pixels) {
+          return;
+        }
 
         ctx.save();
 
-        ctx.fillStyle = player.tracked
-          ? "rgba(82,255,183,0.10)"
-          : "rgba(255,230,109,0.10)";
+        /*
+          Draw the low-resolution green mask enlarged to the screen.
+          The mask was already mirrored when written, matching video.
+        */
+        ctx.imageSmoothingEnabled = true;
+        ctx.globalAlpha = 0.82;
 
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 4;
-
-        ctx.beginPath();
-
-        ctx.ellipse(
-          player.x,
-          player.y,
-          player.radiusX,
-          player.radiusY,
+        ctx.drawImage(
+          maskCanvas,
           0,
           0,
-          Math.PI * 2
+          player.width,
+          player.height,
+          0,
+          0,
+          window.innerWidth,
+          window.innerHeight
         );
 
-        ctx.fill();
-        ctx.stroke();
+        /*
+          Add a bright label above the visible silhouette.
+        */
+        const topY =
+          (player.minY / player.height) *
+          window.innerHeight;
 
-        ctx.fillStyle = color;
+        const centerX =
+          ((player.minX + player.maxX) /
+            (2 * player.width)) *
+          window.innerWidth;
 
-        ctx.beginPath();
-
-        ctx.arc(
-          player.x,
-          player.y,
-          8,
-          0,
-          Math.PI * 2
-        );
-
-        ctx.fill();
-
+        ctx.globalAlpha = 1;
         ctx.fillStyle = "#ffffff";
         ctx.font = "bold 12px Arial";
         ctx.textAlign = "center";
 
         ctx.fillText(
-          label,
-          player.x,
-          player.y - player.radiusY - 14
+          "BODY MASK — DAMAGE ACTIVE",
+          centerX,
+          Math.max(22, topY - 14)
         );
 
         ctx.restore();
@@ -599,20 +892,16 @@
           ctx.setLineDash([8, 7]);
 
           ctx.beginPath();
-
           ctx.moveTo(projectile.x, projectile.y);
-
           ctx.lineTo(
             projectile.targetX,
             projectile.targetY
           );
-
           ctx.stroke();
 
           ctx.setLineDash([]);
 
           ctx.beginPath();
-
           ctx.arc(
             projectile.targetX,
             projectile.targetY,
@@ -620,8 +909,8 @@
             0,
             Math.PI * 2
           );
-
           ctx.stroke();
+
           ctx.restore();
 
           return;
@@ -632,7 +921,6 @@
         ctx.fillStyle = "#51e5ff";
 
         ctx.beginPath();
-
         ctx.arc(
           projectile.x,
           projectile.y,
@@ -640,14 +928,12 @@
           0,
           Math.PI * 2
         );
-
         ctx.fill();
 
         ctx.strokeStyle = "#e2ffff";
         ctx.lineWidth = 2;
 
         ctx.beginPath();
-
         ctx.arc(
           projectile.x,
           projectile.y,
@@ -655,8 +941,40 @@
           0,
           Math.PI * 2
         );
-
         ctx.stroke();
+
+        ctx.restore();
+      }
+
+      function drawWaitingStatus() {
+        if (player.tracked || gameOver) {
+          return;
+        }
+
+        ctx.save();
+
+        ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
+        ctx.fillRect(
+          0,
+          window.innerHeight - 62,
+          window.innerWidth,
+          62
+        );
+
+        ctx.fillStyle = "#ffe66d";
+        ctx.font = "bold 16px Arial";
+        ctx.textAlign = "center";
+
+        const message = poseLandmarker
+          ? "LOOKING FOR BODY SILHOUETTE — DAMAGE OFF"
+          : "LOADING BODY SEGMENTATION — DAMAGE OFF";
+
+        ctx.fillText(
+          message,
+          window.innerWidth / 2,
+          window.innerHeight - 26
+        );
+
         ctx.restore();
       }
 
@@ -668,8 +986,9 @@
           window.innerHeight
         );
 
-        drawPlayerZone();
+        drawBodyMask();
         drawProjectile();
+        drawWaitingStatus();
       }
 
       function updateInfo() {
@@ -677,12 +996,12 @@
           return;
         }
 
-        const zoneState = player.tracked
-          ? "Green: player tracked"
-          : "Yellow: default zone";
+        const trackingState = player.tracked
+          ? "Green body mask: damage active"
+          : "Body mask required: damage off";
 
         info.textContent =
-          `Score: ${score} | Health: ${health} | ${zoneState}`;
+          `Score: ${score} | Health: ${health} | ${trackingState}`;
       }
 
       function loop(timestamp) {
@@ -699,8 +1018,9 @@
 
         loop.lastTime = timestamp;
 
-        updatePersonZone(timestamp);
+        updateSegmentation(timestamp);
         updateProjectile(timestamp, deltaMs);
+
         draw();
         updateInfo();
 
