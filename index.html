@@ -1,11 +1,11 @@
 <!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Storm Runner</title>
 
-
-
-
-Storm Runner
-
-
+<style>
 html,body{
 margin:0;
 overflow:hidden;
@@ -56,28 +56,28 @@ padding:15px 25px;
 font-size:20px;
 cursor:pointer;
 }
+</style>
+</head>
+<body>
 
+<canvas id="game"></canvas>
 
+<div id="hud">
+<div>AURA: <span id="aura">100</span>%</div>
+<div>COMBO: <span id="combo">0</span></div>
+<div>SPD: <span id="spd">0</span></div>
+<div>PL: <span id="pl">0</span></div>
+</div>
 
+<div id="message"></div>
 
+<div id="gameover">
+<h1>STORM REPORT</h1>
+<h2 id="report"></h2>
+<button onclick="restart()">RESTART</button>
+</div>
 
-
-
-AURA: 100%
-COMBO: 0
-SPD: 0
-PL: 0
-
-
-
-
-
-STORM REPORT
-
-RESTART
-
-
-
+<script>
 const canvas=document.getElementById("game");
 const ctx=canvas.getContext("2d");
 
@@ -170,7 +170,7 @@ EVA*.30
 
 report.innerHTML=
 `
-Combat PL: ${combatPL}<ms-copilot-line-break>
+Combat PL: ${combatPL}<br>
 Best Combo: ${bestCombo}
 `;
 
@@ -378,4 +378,41 @@ requestAnimationFrame(loop);
 function restart(){
 
 aura=100;
-combo=
+combo=0;
+bestCombo=0;
+
+SPD=0;
+CTRL=0;
+TAC=0;
+EVA=0;
+
+gameRunning=true;
+
+gameover.style.display="none";
+
+randomMode();
+}
+
+window.addEventListener(
+"mousemove",
+e=>{
+player.x=e.clientX;
+player.y=e.clientY;
+}
+);
+
+window.addEventListener(
+"touchmove",
+e=>{
+player.x=e.touches[0].clientX;
+player.y=e.touches[0].clientY;
+},
+{passive:true}
+);
+
+randomMode();
+loop();
+</script>
+
+</body>
+</html>
