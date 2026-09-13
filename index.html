@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta
     name="viewport"
-    content="width=device-width,initial-scale=1.0,maximum-scale=1,user-scalable=no"
+    content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no"
   />
   <title>Mobility Dodge</title>
 
@@ -84,8 +84,8 @@
   <video id="video" autoplay muted playsinline></video>
   <canvas id="canvas"></canvas>
 
-  <div id="info">Click Start Camera</div>
-  <button id="start">Start Camera</button>
+  <div id="info">Mobility Dodge</div>
+  <button id="start">Start Game</button>
 
   <script type="module">
     import {
@@ -100,6 +100,7 @@
     const startButton = document.getElementById("start");
 
     let poseLandmarker = null;
+    let poseLoadPromise = null;
     let lastVideoTime = -1;
     let running = false;
     let cameraStarted = false;
@@ -135,31 +136,39 @@
     }
 
     async function loadPoseTracking() {
-      if (poseLandmarker) return;
+      if (poseLandmarker) return poseLandmarker;
+      if (poseLoadPromise) return poseLoadPromise;
 
-      try {
-        const vision = await FilesetResolver.forVisionTasks(
-          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm"
-        );
+      poseLoadPromise = (async () => {
+        try {
+          const vision = await FilesetResolver.forVisionTasks(
+            "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm"
+          );
 
-        poseLandmarker = await PoseLandmarker.createFromOptions(
-          vision,
-          {
-            baseOptions: {
-              modelAssetPath:
-                "https://storage.googleapis.com/mediapipe-models/" +
-                "pose_landmarker/pose_landmarker_lite/float16/1/" +
-                "pose_landmarker_lite.task",
-              delegate: "CPU"
-            },
-            runningMode: "VIDEO",
-            numPoses: 1
-          }
-        );
-      } catch (error) {
-        console.error("Pose tracker failed to load:", error);
-        poseLandmarker = null;
-      }
+          poseLandmarker = await PoseLandmarker.createFromOptions(
+            vision,
+            {
+              baseOptions: {
+                modelAssetPath:
+                  "https://storage.googleapis.com/mediapipe-models/" +
+                  "pose_landmarker/pose_landmarker_lite/float16/1/" +
+                  "pose_landmarker_lite.task",
+                delegate: "CPU"
+              },
+              runningMode: "VIDEO",
+              numPoses: 1
+            }
+          );
+
+          return poseLandmarker;
+        } catch (error) {
+          console.error("Pose tracker failed to load:", error);
+          poseLandmarker = null;
+          return null;
+        }
+      })();
+
+      return poseLoadPromise;
     }
 
     function updatePersonZone(timestamp) {
@@ -202,8 +211,8 @@
       const widthPixels = shoulderWidth * window.innerWidth;
 
       /*
-        The camera image is mirrored in CSS, so invert
-        the MediaPipe X coordinate to match it on canvas.
+        The video is mirrored with CSS, so invert MediaPipe's
+        normalized X coordinate to align the canvas hit zone.
       */
       player.x = (1 - nose.x) * window.innerWidth;
       player.y = nose.y * window.innerHeight;
@@ -310,7 +319,6 @@
 
     function drawPlayerZone() {
       const color = player.tracked ? "#52ffb7" : "#ffe66d";
-
       const label = player.tracked
         ? "PLAYER HIT ZONE"
         : "DEFAULT HIT ZONE";
@@ -445,21 +453,27 @@
     }
 
     async function startGame() {
+      if (running) return;
+
       try {
         startButton.disabled = true;
-        startButton.textContent = "Starting Camera...";
+        startButton.textContent = "Allow Camera...";
 
         /*
-          Request the camera only once. Restarting the game
-          continues using the stream already attached to video.
+          Request the camera directly from this button click.
+          Browsers require this kind of user action before they
+          show the native camera permission prompt.
         */
         if (!cameraStarted) {
           const stream = await navigator.mediaDevices.getUserMedia({
-            video: true,
+            video: {
+              facingMode: "user"
+            },
             audio: false
           });
 
           video.srcObject = stream;
+
           await video.play();
 
           cameraStarted = true;
@@ -478,6 +492,7 @@
 
         lastVideoTime = -1;
         loop.lastTime = undefined;
+
         running = true;
 
         startButton.classList.add("hidden");
@@ -485,25 +500,44 @@
         info.textContent =
           "Game active. Yellow zone is active until player tracking begins.";
 
+        /*
+          The loop begins only after the camera stream plays.
+        */
         requestAnimationFrame(loop);
 
         /*
-          The game works while this loads. If it fails,
-          the yellow center zone remains active.
+          The game does not wait for tracking. Until MediaPipe
+          finishes loading, it uses the yellow fallback zone.
         */
         loadPoseTracking();
-      } catch (error) {
-        console.error(error);
 
-        info.textContent =
-          `Camera error: ${error.name || ""} ${error.message || ""}`;
+      } catch (error) {
+        console.error("Camera startup failed:", error);
+
+        running = false;
 
         startButton.disabled = false;
         startButton.textContent = "Try Camera Again";
+        startButton.classList.remove("hidden");
+
+        if (error.name === "NotAllowedError") {
+          info.textContent =
+            "Camera permission was denied. Allow access and try again.";
+        } else if (error.name === "NotFoundError") {
+          info.textContent =
+            "No camera was found on this device.";
+        } else if (error.name === "NotReadableError") {
+          info.textContent =
+            "The camera is busy in another app or browser tab.";
+        } else {
+          info.textContent =
+            `Camera error: ${error.name || "Unknown error"}`;
+        }
       }
     }
 
     startButton.addEventListener("click", startGame);
+
     window.addEventListener("resize", resizeCanvas);
 
     window.addEventListener("beforeunload", () => {
