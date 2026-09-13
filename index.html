@@ -1,380 +1,66 @@
 <!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta
-    name="viewport"
-    content="width=device-width,initial-scale=1.0"
-  />
-  <title>Storm Runner Test</title>
+<html>
+<body style="margin:0;background:#111;">
+  <button
+    id="start"
+    style="
+      position:fixed;
+      z-index:2;
+      top:20px;
+      left:20px;
+      padding:15px;
+      font-size:18px;
+    "
+  >
+    Start Camera
+  </button>
 
-  <style>
-    html,
-    body {
-      margin: 0;
-      width: 100%;
-      height: 100%;
-      overflow: hidden;
-      background: #020814;
-      font-family: Arial, sans-serif;
-    }
-
-    video {
-      position: fixed;
-      inset: 0;
-      width: 100vw;
-      height: 100dvh;
-      object-fit: cover;
-      transform: scaleX(-1);
-      opacity: 0.35;
-      background: #000;
-    }
-
-    canvas {
-      position: fixed;
-      inset: 0;
-      width: 100vw;
-      height: 100dvh;
-      pointer-events: none;
-    }
-
-    #status {
-      position: fixed;
-      z-index: 10;
-      top: 10px;
-      left: 10px;
-      right: 10px;
-      max-width: 620px;
-      padding: 10px;
-      border: 1px solid rgba(89, 255, 224, 0.4);
-      border-radius: 10px;
-      background: rgba(0, 0, 0, 0.72);
-      color: white;
-      font-size: 13px;
-      line-height: 1.4;
-      white-space: pre-wrap;
-    }
-
-    #start-button {
-      position: fixed;
-      z-index: 20;
-      top: 50%;
-      left: 50%;
-      width: min(300px, calc(100vw - 40px));
-      padding: 15px;
-      border: 0;
-      border-radius: 12px;
-      background: linear-gradient(135deg, #59ffe0, #62aaff);
-      color: #03111d;
-      cursor: pointer;
-      font-size: 16px;
-      font-weight: 900;
-      transform: translate(-50%, -50%);
-      box-shadow: 0 10px 28px rgba(78, 220, 255, 0.34);
-    }
-
-    #start-button:disabled {
-      cursor: wait;
-      opacity: 0.65;
-    }
-
-    #start-button.hidden {
-      display: none;
-    }
-  </style>
-</head>
-
-<body>
   <video
     id="video"
     autoplay
     playsinline
     muted
+    style="
+      width:100vw;
+      height:100vh;
+      object-fit:cover;
+    "
   ></video>
 
-  <canvas id="game"></canvas>
+  <script>
+    const button =
+    document.getElementById("start");
 
-  <div id="status">Ready. Click “Start Camera.”</div>
+    const video =
+    document.getElementById("video");
 
-  <button id="start-button">Start Camera</button>
+    button.onclick =
+    async function(){
 
-  <script type="module">
-    import {
-      FilesetResolver,
-      PoseLandmarker
-    } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/+esm";
+      try{
 
-    const video = document.getElementById("video");
-    const canvas = document.getElementById("game");
-    const ctx = canvas.getContext("2d");
-    const status = document.getElementById("status");
-    const startButton = document.getElementById("start-button");
-
-    const MP_VERSION = "0.10.22";
-
-    const WASM_URL =
-      `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}/wasm`;
-
-    const MODEL_URL =
-      "https://storage.googleapis.com/mediapipe-models/" +
-      "pose_landmarker/pose_landmarker_full/float16/1/" +
-      "pose_landmarker_full.task";
-
-    let poseLandmarker = null;
-    let lastVideoTime = -1;
-    let appStarted = false;
-    let lastPose = null;
-
-    const player = {
-      x: window.innerWidth / 2,
-      y: window.innerHeight / 2
-    };
-
-    function setStatus(message) {
-      status.textContent = message;
-      console.log("[Storm Runner]", message);
-    }
-
-    function resizeCanvas() {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-
-      canvas.width = Math.floor(window.innerWidth * dpr);
-      canvas.height = Math.floor(window.innerHeight * dpr);
-
-      canvas.style.width = `${window.innerWidth}px`;
-      canvas.style.height = `${window.innerHeight}px`;
-
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    }
-
-    function waitForMetadata() {
-      return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(
-            new Error(
-              "Camera stream started, but video metadata did not load in time."
-            )
-          );
-        }, 10000);
-
-        function onLoaded() {
-          clearTimeout(timeout);
-          resolve();
-        }
-
-        if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
-          onLoaded();
-          return;
-        }
-
-        video.addEventListener("loadedmetadata", onLoaded, {
-          once: true
-        });
-      });
-    }
-
-    async function setupCamera() {
-      if (!window.isSecureContext) {
-        throw new Error(
-          "This page is not in a secure context. Use localhost or HTTPS. Do not open it with file://."
-        );
-      }
-
-      if (!navigator.mediaDevices?.getUserMedia) {
-        throw new Error(
-          "This browser does not support getUserMedia camera access."
-        );
-      }
-
-      setStatus("Requesting front-camera permission…");
-
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: {
-          facingMode: { ideal: "user" },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 30, max: 60 }
-        }
-      });
-
-      video.srcObject = stream;
-
-      await waitForMetadata();
-      await video.play();
-
-      setStatus(
-        `Camera ready: ${video.videoWidth} × ${video.videoHeight}`
-      );
-    }
-
-    async function setupPose() {
-      setStatus("Loading MediaPipe WebAssembly runtime…");
-
-      const vision = await FilesetResolver.forVisionTasks(
-        WASM_URL
-      );
-
-      setStatus("Loading Pose Landmarker model…");
-
-      poseLandmarker =
-        await PoseLandmarker.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath: MODEL_URL,
-            delegate: "CPU"
-          },
-          runningMode: "VIDEO",
-          numPoses: 1,
-          minPoseDetectionConfidence: 0.5,
-          minPosePresenceConfidence: 0.5,
-          minTrackingConfidence: 0.5
+        const stream =
+        await navigator.mediaDevices.getUserMedia({
+          video:true,
+          audio:false
         });
 
-      setStatus(
-        "Pose tracking active. Step back until your head and shoulders are visible."
-      );
-    }
+        video.srcObject=stream;
 
-    function updatePose(timestamp) {
-      if (
-        !poseLandmarker ||
-        video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
-      ) {
-        return;
-      }
+        await video.play();
 
-      if (video.currentTime === lastVideoTime) {
-        return;
-      }
+        button.textContent=
+        "Camera Working";
 
-      lastVideoTime = video.currentTime;
+      }catch(error){
 
-      const result = poseLandmarker.detectForVideo(
-        video,
-        timestamp
-      );
+        button.textContent=
+        "Camera Failed";
 
-      if (!result.landmarks?.length) {
-        lastPose = null;
-        return;
-      }
-
-      const nose = result.landmarks[0][0];
-
-      if (!nose) {
-        lastPose = null;
-        return;
-      }
-
-      lastPose = nose;
-
-      player.x = (1 - nose.x) * window.innerWidth;
-      player.y = nose.y * window.innerHeight;
-    }
-
-    function draw() {
-      ctx.clearRect(
-        0,
-        0,
-        window.innerWidth,
-        window.innerHeight
-      );
-
-      ctx.strokeStyle = lastPose ? "#59ffe0" : "#ff7f91";
-      ctx.lineWidth = 4;
-
-      ctx.beginPath();
-      ctx.arc(
-        player.x,
-        player.y,
-        40,
-        0,
-        Math.PI * 2
-      );
-      ctx.stroke();
-
-      ctx.fillStyle = lastPose ? "cyan" : "#ff7f91";
-
-      ctx.beginPath();
-      ctx.arc(
-        player.x,
-        player.y,
-        10,
-        0,
-        Math.PI * 2
-      );
-      ctx.fill();
-
-      ctx.fillStyle = "white";
-      ctx.font = "bold 14px Arial";
-      ctx.textAlign = "center";
-
-      ctx.fillText(
-        lastPose ? "NOSE TRACKED" : "NO POSE",
-        player.x,
-        player.y - 55
-      );
-    }
-
-    function loop(timestamp) {
-      if (!appStarted) return;
-
-      updatePose(timestamp);
-      draw();
-
-      requestAnimationFrame(loop);
-    }
-
-    async function startApp() {
-      startButton.disabled = true;
-      startButton.textContent = "Starting…";
-
-      try {
-        resizeCanvas();
-
-        await setupCamera();
-        await setupPose();
-
-        appStarted = true;
-        startButton.classList.add("hidden");
-
-        requestAnimationFrame(loop);
-      } catch (error) {
         console.error(error);
 
-        const errorMessage =
-          error?.name === "NotAllowedError"
-            ? "Camera permission was denied. Use the camera/padlock icon in the address bar to allow access, then try again."
-            : error?.name === "NotFoundError"
-              ? "No usable camera was found."
-              : error?.message || String(error);
-
-        setStatus(`ERROR:\n${errorMessage}`);
-
-        startButton.disabled = false;
-        startButton.textContent = "Try Start Camera Again";
       }
-    }
-
-    startButton.addEventListener("click", startApp);
-
-    window.addEventListener("resize", resizeCanvas);
-
-    window.addEventListener("beforeunload", () => {
-      const stream = video.srcObject;
-
-      if (stream) {
-        stream.getTracks().forEach((track) => track.stop());
-      }
-    });
-
-    resizeCanvas();
-
-    if (!window.isSecureContext) {
-      setStatus(
-        "WARNING: Not secure. Open through localhost or HTTPS. Camera access will not work from file://."
-      );
-    }
+    };
   </script>
 </body>
 </html>
