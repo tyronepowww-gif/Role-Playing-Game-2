@@ -24,18 +24,12 @@
       font-family: Arial, Helvetica, sans-serif;
     }
 
-    #app,
     #video,
     #canvas {
       position: fixed;
       inset: 0;
-      width: 100%;
-      height: 100%;
-    }
-
-    #app {
-      overflow: hidden;
-      background: #05070b;
+      width: 100vw;
+      height: 100dvh;
     }
 
     #video {
@@ -60,7 +54,7 @@
       flex-wrap: wrap;
       gap: 8px;
       max-width: calc(100vw - 24px);
-      color: #ffffff;
+      color: white;
       font-size: 14px;
     }
 
@@ -69,11 +63,6 @@
       border: 1px solid rgba(255, 255, 255, 0.15);
       border-radius: 9px;
       background: rgba(0, 0, 0, 0.72);
-      line-height: 1.2;
-    }
-
-    #status {
-      color: #dbe7ff;
     }
 
     #permission-panel {
@@ -83,23 +72,17 @@
       display: grid;
       place-items: center;
       padding: 24px;
-      background:
-        radial-gradient(
-          circle at center,
-          rgba(54, 18, 39, 0.46),
-          rgba(0, 0, 0, 0.92) 68%
-        );
+      background: rgba(0, 0, 0, 0.88);
     }
 
     #permission-card {
-      width: min(440px, 100%);
+      width: min(420px, 100%);
       padding: 24px;
       border: 1px solid rgba(255, 255, 255, 0.18);
       border-radius: 16px;
-      background: rgba(11, 12, 18, 0.96);
-      color: #ffffff;
+      background: #11131a;
+      color: white;
       text-align: center;
-      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
     }
 
     #permission-card h1 {
@@ -109,14 +92,12 @@
 
     #permission-card p {
       margin: 0 0 18px;
-      color: #d3d8e5;
-      font-size: 15px;
-      line-height: 1.55;
+      color: #d4d8e2;
+      line-height: 1.5;
     }
 
-    #camera-permission {
-      min-width: 190px;
-      padding: 13px 18px;
+    #allow-camera {
+      padding: 13px 20px;
       border: 0;
       border-radius: 10px;
       background: #73f5ff;
@@ -126,11 +107,7 @@
       font-weight: 700;
     }
 
-    #camera-permission:hover {
-      background: #a3f9ff;
-    }
-
-    #camera-permission:disabled {
+    #allow-camera:disabled {
       cursor: wait;
       opacity: 0.65;
     }
@@ -142,40 +119,32 @@
 </head>
 
 <body>
-  <main id="app">
-    <video id="video" autoplay muted playsinline></video>
-    <canvas id="canvas"></canvas>
+  <video id="video" autoplay muted playsinline></video>
+  <canvas id="canvas"></canvas>
 
-    <div id="hud">
-      <div class="hud-item" id="score-display">Score: 0</div>
-      <div class="hud-item" id="health-display">Health: 3</div>
-      <div class="hud-item" id="status">
-        Camera permission required
-      </div>
+  <div id="hud">
+    <div class="hud-item" id="score">Score: 0</div>
+    <div class="hud-item" id="health">Health: 3</div>
+    <div class="hud-item" id="status">Camera required</div>
+  </div>
+
+  <section id="permission-panel">
+    <div id="permission-card">
+      <h1>Laser Dodge</h1>
+
+      <p id="permission-message">
+        Allow camera access. The game begins as soon as a person is visible.
+      </p>
+
+      <button id="allow-camera" type="button">
+        Allow Camera
+      </button>
     </div>
+  </section>
 
-    <section id="permission-panel" aria-live="polite">
-      <div id="permission-card">
-        <h1>Laser Dodge</h1>
-
-        <p id="permission-message">
-          Allow camera access. The game starts when it detects a clear person
-          separated from the background.
-        </p>
-
-        <button id="camera-permission" type="button">
-          Allow Camera
-        </button>
-      </div>
-    </section>
-  </main>
-
-  <!-- TensorFlow.js runtime and GPU/WebGL backend -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.22.0/dist/tf-core.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.22.0/dist/tf-backend-webgl.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter@4.22.0/dist/tf-converter.min.js"></script>
-
-  <!-- TensorFlow.js body/person segmentation model package -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/body-segmentation@1.0.2/dist/body-segmentation.min.js"></script>
 
   <script>
@@ -184,9 +153,9 @@
       const canvas = document.getElementById("canvas");
       const ctx = canvas.getContext("2d");
 
-      const scoreDisplay = document.getElementById("score-display");
-      const healthDisplay = document.getElementById("health-display");
-      const statusDisplay = document.getElementById("status");
+      const scoreElement = document.getElementById("score");
+      const healthElement = document.getElementById("health");
+      const statusElement = document.getElementById("status");
 
       const permissionPanel =
         document.getElementById("permission-panel");
@@ -194,12 +163,11 @@
       const permissionMessage =
         document.getElementById("permission-message");
 
-      const permissionButton =
-        document.getElementById("camera-permission");
+      const allowCameraButton =
+        document.getElementById("allow-camera");
 
       /*
-        The low-resolution, green body mask lives here.
-        It is not visible in the HTML directly; the main canvas draws it.
+        Offscreen canvas used for the visual green foreground mask.
       */
       const maskCanvas = document.createElement("canvas");
       const maskCtx = maskCanvas.getContext(
@@ -207,71 +175,52 @@
         { willReadFrequently: true }
       );
 
-      let mediaStream = null;
+      let stream = null;
       let segmenter = null;
-      let segmenterLoading = false;
 
-      let segmentationBusy = false;
+      let segmenting = false;
       let lastSegmentationAt = 0;
 
-      let running = false;
-      let playing = false;
-      let gameOver = false;
+      let gameRunning = false;
+      let playerVisible = false;
+      let lastPlayerSeenAt = 0;
 
       let score = 0;
       let health = 3;
 
       let laser = null;
-      let lastLaserEndedAt = 0;
+      let lastLaserTime = 0;
 
       /*
-        Segmentation runs about 13 times per second. Drawing remains
-        smooth through requestAnimationFrame.
+        Keep this interval modest. Increasing it to 125 makes slower
+        phones work more easily; reducing it to 60 makes the mask update
+        more often on faster devices.
       */
-      const segmentationIntervalMs = 75;
+      const segmentationEveryMs = 100;
 
       /*
-        Alpha threshold from the person/background mask.
-        Raise it if background is included in the player mask.
-        Lower it if the mask loses too much of the player.
+        The binary mask has a fully opaque green foreground. Count at
+        least this many person pixels to consider the player visible.
+
+        This deliberately stays low: it is only protecting against
+        an empty mask, not imposing a body-size requirement.
       */
-      const personAlphaThreshold = 145;
+      const minimumPersonPixels = 120;
 
       /*
-        A valid human mask must cover at least this fraction of the
-        segmentation frame. This prevents tiny/noisy regions from
-        triggering the start of the game.
+        Keep the last mask active for this long following a segmentation
+        miss. It prevents small temporary detection flicker.
       */
-      const minBodyAreaRatio = 0.018;
+      const playerGraceMs = 1000;
 
       /*
-        The mask needs to remain valid for this many inference frames
-        before the first laser can spawn.
+        Mask data used for collision.
+        `1` means person, `0` means background.
       */
-      const requiredStableFrames = 7;
-
-      /*
-        Keep the most recent valid body mask briefly when an individual
-        TensorFlow inference frame is weak; after this time, all laser
-        activity pauses and collisions turn off.
-      */
-      const trackingGraceMs = 800;
-
-      let stableFrames = 0;
-
-      const player = {
-        tracked: false,
-        lastTrackedAt: 0,
-
-        /*
-          Binary mask: 255 means body, 0 means background.
-        */
+      const playerMask = {
         pixels: null,
-
         width: 0,
-        height: 0,
-
-        activePixelCount: 0
+        height: 0
       };
 
       function resizeCanvas() {
@@ -286,318 +235,211 @@
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       }
 
-      function clearPlayerMask() {
-        player.tracked = false;
-        player.pixels = null;
-        player.width = 0;
-        player.height = 0;
-        player.activePixelCount = 0;
+      function clearMask() {
+        playerMask.pixels = null;
+        playerMask.width = 0;
+        playerMask.height = 0;
 
         maskCanvas.width = 1;
         maskCanvas.height = 1;
+
+        playerVisible = false;
       }
 
       function resetGame() {
         score = 0;
         health = 3;
         laser = null;
+        lastLaserTime = performance.now();
 
-        lastLaserEndedAt = performance.now();
-        lastSegmentationAt = 0;
+        playerVisible = false;
+        lastPlayerSeenAt = 0;
 
-        stableFrames = 0;
-        playing = false;
-        gameOver = false;
-
-        player.lastTrackedAt = 0;
-
-        clearPlayerMask();
+        clearMask();
         updateHud();
       }
 
       function updateHud() {
-        scoreDisplay.textContent = `Score: ${score}`;
-        healthDisplay.textContent = `Health: ${health}`;
-
-        if (gameOver) {
-          statusDisplay.textContent =
-            "Game over — refresh the page to play again.";
-          return;
-        }
+        scoreElement.textContent = `Score: ${score}`;
+        healthElement.textContent = `Health: ${health}`;
 
         if (!segmenter) {
-          statusDisplay.textContent =
+          statusElement.textContent =
             "Loading person detection…";
           return;
         }
 
-        if (!player.tracked) {
-          statusDisplay.textContent =
-            "Looking for a person — lasers inactive.";
+        if (!playerVisible) {
+          statusElement.textContent =
+            "Step into view — lasers are off.";
           return;
         }
 
-        if (!playing) {
-          statusDisplay.textContent =
-            `Person detected — stabilizing ${stableFrames}/${requiredStableFrames}`;
-          return;
-        }
-
-        statusDisplay.textContent =
-          "Person tracked — dodge the red laser.";
+        statusElement.textContent =
+          "Person detected — dodge the laser.";
       }
 
-      function showCameraError(error) {
-        console.error("Camera error:", error);
+      function showError(error) {
+        console.error(error);
 
-        permissionButton.disabled = false;
-        permissionButton.textContent = "Try Camera Again";
-
-        let message = "";
+        allowCameraButton.disabled = false;
+        allowCameraButton.textContent = "Try Camera Again";
 
         if (!window.isSecureContext) {
-          message =
-            "Camera access requires HTTPS. Open your GitHub Pages link, not a local file or an HTTP address.";
-        } else if (!navigator.mediaDevices?.getUserMedia) {
-          message =
-            "This browser does not support camera access.";
-        } else if (error?.name === "NotAllowedError") {
-          message =
-            "Camera permission was blocked. Use the browser camera or lock icon in the address bar, allow access for this site, then try again.";
-        } else if (error?.name === "NotFoundError") {
-          message =
-            "No usable camera was found on this device.";
-        } else if (error?.name === "NotReadableError") {
-          message =
-            "The camera is busy in another app or browser tab.";
-        } else {
-          message =
-            `Camera could not start: ${
-              error?.message || error?.name || "Unknown error"
-            }`;
-        }
-
-        permissionMessage.textContent = message;
-        statusDisplay.textContent = "Camera access was not granted.";
-      }
-
-      async function enableCamera(event) {
-        event.preventDefault();
-
-        if (mediaStream) {
-          permissionPanel.classList.add("hidden");
-          return;
-        }
-
-        if (!window.isSecureContext) {
-          showCameraError(
-            new Error("This page is not running in a secure context.")
-          );
-          return;
-        }
-
-        if (!navigator.mediaDevices?.getUserMedia) {
-          showCameraError(
-            new Error("navigator.mediaDevices.getUserMedia is unavailable.")
-          );
-          return;
-        }
-
-        try {
-          permissionButton.disabled = true;
-          permissionButton.textContent = "Requesting Access…";
-
           permissionMessage.textContent =
-            "Your browser should now display its camera permission dialog.";
+            "Camera access requires HTTPS. Open the GitHub Pages website, not a local file.";
+        } else if (error?.name === "NotAllowedError") {
+          permissionMessage.textContent =
+            "Camera permission was denied. Allow it in your browser site settings, then try again.";
+        } else if (error?.name === "NotFoundError") {
+          permissionMessage.textContent =
+            "No camera was found.";
+        } else if (error?.name === "NotReadableError") {
+          permissionMessage.textContent =
+            "Another app or tab is already using the camera.";
+        } else {
+          permissionMessage.textContent =
+            `Camera error: ${error?.message || "Unknown error"}`;
+        }
+
+        statusElement.textContent = "Camera unavailable.";
+      }
+
+      async function allowCamera() {
+        try {
+          allowCameraButton.disabled = true;
+          allowCameraButton.textContent = "Requesting Camera…";
 
           /*
-            This must occur directly from the user click path.
+            Camera request stays directly inside a real click handler.
           */
-          mediaStream = await navigator.mediaDevices.getUserMedia({
+          stream = await navigator.mediaDevices.getUserMedia({
             video: true,
             audio: false
           });
 
-          video.srcObject = mediaStream;
+          video.srcObject = stream;
           await video.play();
-
-          resetGame();
 
           permissionPanel.classList.add("hidden");
 
-          statusDisplay.textContent =
-            "Camera active. Loading TensorFlow person detection…";
+          resetGame();
 
-          running = true;
+          statusElement.textContent =
+            "Loading TensorFlow person detection…";
+
+          gameRunning = true;
           requestAnimationFrame(loop);
 
-          loadSegmenter();
+          await loadSegmenter();
 
         } catch (error) {
-          showCameraError(error);
+          showError(error);
         }
       }
 
       async function loadSegmenter() {
-        if (segmenter || segmenterLoading) {
+        if (segmenter) {
           return;
         }
 
-        segmenterLoading = true;
-
-        try {
-          if (!window.tf || !window.bodySegmentation) {
-            throw new Error(
-              "TensorFlow.js libraries did not load. Check your connection and reload."
-            );
-          }
-
-          await tf.setBackend("webgl");
-          await tf.ready();
-
-          const model =
-            bodySegmentation.SupportedModels
-              .MediaPipeSelfieSegmentation;
-
-          /*
-            TensorFlow.js runs the model. "general" is used because
-            it is the better choice when more of the player is visible.
-          */
-          segmenter =
-            await bodySegmentation.createSegmenter(
-              model,
-              {
-                runtime: "tfjs",
-                modelType: "general"
-              }
-            );
-
-          updateHud();
-
-        } catch (error) {
-          console.error("Person segmentation error:", error);
-
-          statusDisplay.textContent =
-            "Camera active, but person detection could not load.";
-
-        } finally {
-          segmenterLoading = false;
+        if (!window.tf || !window.bodySegmentation) {
+          throw new Error(
+            "TensorFlow.js did not load. Check your connection and reload."
+          );
         }
+
+        await tf.setBackend("webgl");
+        await tf.ready();
+
+        segmenter = await bodySegmentation.createSegmenter(
+          bodySegmentation.SupportedModels
+            .MediaPipeSelfieSegmentation,
+          {
+            runtime: "tfjs",
+            modelType: "general"
+          }
+        );
+
+        updateHud();
       }
 
       /*
-        Converts segmentation-mask image data into:
-        - A horizontally mirrored binary mask for accurate collisions.
-        - A translucent green RGBA mask for visual feedback.
-        - A simple count of body pixels for the start criterion.
+        Convert ImageData produced by bodySegmentation.toBinaryMask()
+        into:
+        - a screen-mirrored collision mask
+        - a translucent green visual silhouette
+
+        Foreground pixels are green and opaque; background pixels are
+        transparent. We only check alpha here.
       */
-      function updatePlayerMask(maskImageData) {
-        const sourceWidth = maskImageData.width;
-        const sourceHeight = maskImageData.height;
+      function storeBinaryMask(binaryMaskImageData) {
+        const width = binaryMaskImageData.width;
+        const height = binaryMaskImageData.height;
+        const source = binaryMaskImageData.data;
 
-        if (!sourceWidth || !sourceHeight) {
-          clearPlayerMask();
-          return false;
-        }
+        const pixels = new Uint8Array(width * height);
+        const visual = new Uint8ClampedArray(width * height * 4);
 
-        const sourcePixels = maskImageData.data;
+        let personPixelCount = 0;
 
-        const binary = new Uint8Array(
-          sourceWidth * sourceHeight
-        );
+        for (let y = 0; y < height; y += 1) {
+          for (let x = 0; x < width; x += 1) {
+            const sourceIndex = y * width + x;
+            const sourceRgbaIndex = sourceIndex * 4;
 
-        const greenMask = new Uint8ClampedArray(
-          sourceWidth * sourceHeight * 4
-        );
-
-        let activePixelCount = 0;
-
-        for (let y = 0; y < sourceHeight; y += 1) {
-          for (let x = 0; x < sourceWidth; x += 1) {
-            const sourceIndex =
-              y * sourceWidth + x;
-
-            const sourceRgbaIndex =
-              sourceIndex * 4;
+            const alpha = source[sourceRgbaIndex + 3];
 
             /*
-              Person/background confidence comes through alpha.
+              toBinaryMask writes transparent background and opaque
+              foreground. Alpha above 0 therefore means person.
             */
-            const alpha =
-              sourcePixels[sourceRgbaIndex + 3];
-
-            if (alpha < personAlphaThreshold) {
+            if (alpha === 0) {
               continue;
             }
 
             /*
-              Video is mirrored in CSS. Mirror the model mask before
-              drawing or testing collision so screen positions match.
+              Mirror mask X to align with CSS-mirrored video.
             */
-            const mirroredX =
-              sourceWidth - 1 - x;
+            const mirroredX = width - 1 - x;
+            const targetIndex = y * width + mirroredX;
+            const targetRgbaIndex = targetIndex * 4;
 
-            const targetIndex =
-              y * sourceWidth + mirroredX;
+            pixels[targetIndex] = 1;
 
-            const targetRgbaIndex =
-              targetIndex * 4;
+            visual[targetRgbaIndex] = 72;
+            visual[targetRgbaIndex + 1] = 255;
+            visual[targetRgbaIndex + 2] = 180;
+            visual[targetRgbaIndex + 3] = 130;
 
-            binary[targetIndex] = 255;
-
-            greenMask[targetRgbaIndex] = 75;
-            greenMask[targetRgbaIndex + 1] = 255;
-            greenMask[targetRgbaIndex + 2] = 180;
-            greenMask[targetRgbaIndex + 3] = 125;
-
-            activePixelCount += 1;
+            personPixelCount += 1;
           }
         }
 
-        const totalPixels =
-          sourceWidth * sourceHeight;
-
-        const bodyAreaRatio =
-          activePixelCount / totalPixels;
-
-        /*
-          This is the entire person-present test.
-          No pose landmarks or face detection are involved.
-        */
-        if (
-          activePixelCount === 0 ||
-          bodyAreaRatio < minBodyAreaRatio
-        ) {
-          clearPlayerMask();
+        if (personPixelCount < minimumPersonPixels) {
           return false;
         }
 
-        maskCanvas.width = sourceWidth;
-        maskCanvas.height = sourceHeight;
+        maskCanvas.width = width;
+        maskCanvas.height = height;
 
         maskCtx.putImageData(
-          new ImageData(
-            greenMask,
-            sourceWidth,
-            sourceHeight
-          ),
+          new ImageData(visual, width, height),
           0,
           0
         );
 
-        player.pixels = binary;
-        player.width = sourceWidth;
-        player.height = sourceHeight;
-        player.activePixelCount = activePixelCount;
-        player.tracked = true;
+        playerMask.pixels = pixels;
+        playerMask.width = width;
+        playerMask.height = height;
 
         return true;
       }
 
-      async function updateSegmentation(timestamp) {
+      async function updatePersonMask(timestamp) {
         if (
           !segmenter ||
-          segmentationBusy ||
+          segmenting ||
           video.readyState <
             HTMLMediaElement.HAVE_CURRENT_DATA
         ) {
@@ -606,250 +448,197 @@
 
         if (
           timestamp - lastSegmentationAt <
-          segmentationIntervalMs
+          segmentationEveryMs
         ) {
           return;
         }
 
-        segmentationBusy = true;
+        segmenting = true;
         lastSegmentationAt = timestamp;
 
         try {
-          const people =
-            await segmenter.segmentPeople(
-              video,
-              {
-                flipHorizontal: false,
-                multiSegmentation: false,
-                segmentBodyParts: false
-              }
-            );
-
-          const person = people?.[0];
-
-          if (!person?.mask) {
-            stableFrames = 0;
-
-            if (
-              timestamp - player.lastTrackedAt >
-              trackingGraceMs
-            ) {
-              clearPlayerMask();
+          /*
+            Ask TensorFlow for a person/background segmentation.
+          */
+          const people = await segmenter.segmentPeople(
+            video,
+            {
+              flipHorizontal: false,
+              multiSegmentation: false,
+              segmentBodyParts: false
             }
-
-            return;
-          }
+          );
 
           /*
-            Converts the person/background segmentation to ImageData.
+            Convert the segmentation list through the official utility.
+            Foreground is opaque green; background is transparent.
           */
-          const maskImageData =
-            await person.mask.toImageData();
+          const binaryMask =
+            await bodySegmentation.toBinaryMask(
+              people,
+              {
+                r: 72,
+                g: 255,
+                b: 180,
+                a: 255
+              },
+              {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 0
+              },
+              false,
+              0.5
+            );
 
-          const personVisible =
-            updatePlayerMask(maskImageData);
+          const detected = storeBinaryMask(binaryMask);
 
-          if (!personVisible) {
-            stableFrames = 0;
-
-            if (
-              timestamp - player.lastTrackedAt >
-              trackingGraceMs
-            ) {
-              clearPlayerMask();
-            }
-
-            return;
-          }
-
-          player.lastTrackedAt = timestamp;
-
-          if (!playing) {
-            stableFrames += 1;
-
-            if (
-              stableFrames >=
-              requiredStableFrames
-            ) {
-              playing = true;
-              lastLaserEndedAt = timestamp;
-            }
+          if (detected) {
+            playerVisible = true;
+            lastPlayerSeenAt = timestamp;
+          } else if (
+            timestamp - lastPlayerSeenAt >
+            playerGraceMs
+          ) {
+            clearMask();
           }
 
         } catch (error) {
-          console.warn(
-            "Person segmentation frame failed:",
-            error
-          );
+          console.warn("Segmentation frame failed:", error);
 
         } finally {
-          segmentationBusy = false;
+          segmenting = false;
         }
       }
 
       function spawnLaser(timestamp) {
-        if (!playing || !player.tracked) {
+        if (!playerVisible) {
           return;
         }
 
-        const orientation =
-          Math.random() > 0.5
-            ? "horizontal"
-            : "vertical";
-
-        const linePosition =
-          orientation === "horizontal"
-            ? 70 +
-              Math.random() *
-              Math.max(
-                80,
-                window.innerHeight - 140
-              )
-            : 70 +
-              Math.random() *
-              Math.max(
-                80,
-                window.innerWidth - 140
-              );
+        const horizontal = Math.random() > 0.5;
 
         laser = {
-          orientation,
-          linePosition,
+          horizontal,
+          position: horizontal
+            ? 70 +
+              Math.random() *
+              Math.max(80, window.innerHeight - 140)
+            : 70 +
+              Math.random() *
+              Math.max(80, window.innerWidth - 140),
           createdAt: timestamp,
-          warningTime: 850,
-          activeTime: 950,
-          thickness: 20,
+          warningMs: 900,
+          activeMs: 850,
           active: false,
-          damageApplied: false
+          hit: false,
+          thickness: 20
         };
       }
 
       function updateLaser(timestamp) {
         /*
-          No tracked silhouette = no lasers and no collision damage.
+          No segmentation mask means no laser damage.
         */
-        if (!playing || !player.tracked) {
+        if (!playerVisible) {
           return;
         }
 
         if (!laser) {
-          if (timestamp - lastLaserEndedAt > 1100) {
+          if (timestamp - lastLaserTime > 1150) {
             spawnLaser(timestamp);
           }
 
           return;
         }
 
-        const elapsed =
-          timestamp - laser.createdAt;
+        const elapsed = timestamp - laser.createdAt;
 
-        if (
-          !laser.active &&
-          elapsed >= laser.warningTime
-        ) {
+        if (!laser.active && elapsed >= laser.warningMs) {
           laser.active = true;
         }
 
         if (
           laser.active &&
-          !laser.damageApplied &&
-          laserHitsPlayer(laser)
+          !laser.hit &&
+          laserHitsPerson(laser)
         ) {
-          laser.damageApplied = true;
+          laser.hit = true;
           health -= 1;
 
           if (health <= 0) {
-            running = false;
-            gameOver = true;
-            updateHud();
-            return;
+            gameRunning = false;
+            statusElement.textContent =
+              `Game over — final score: ${score}. Refresh to play again.`;
           }
         }
 
-        if (
-          elapsed >=
-          laser.warningTime + laser.activeTime
-        ) {
-          if (!laser.damageApplied) {
+        if (elapsed >= laser.warningMs + laser.activeMs) {
+          if (!laser.hit) {
             score += 1;
           }
 
           laser = null;
-          lastLaserEndedAt = timestamp;
+          lastLaserTime = timestamp;
         }
       }
 
-      function bodyMaskContainsScreenPoint(
-        screenX,
-        screenY
-      ) {
+      function maskHasPersonAt(screenX, screenY) {
         if (
-          !player.tracked ||
-          !player.pixels ||
-          player.width <= 0 ||
-          player.height <= 0
+          !playerMask.pixels ||
+          playerMask.width === 0 ||
+          playerMask.height === 0
         ) {
           return false;
         }
 
-        const maskX = Math.floor(
+        const x = Math.floor(
           (screenX / window.innerWidth) *
-          player.width
+          playerMask.width
         );
 
-        const maskY = Math.floor(
+        const y = Math.floor(
           (screenY / window.innerHeight) *
-          player.height
+          playerMask.height
         );
 
         if (
-          maskX < 0 ||
-          maskX >= player.width ||
-          maskY < 0 ||
-          maskY >= player.height
+          x < 0 ||
+          x >= playerMask.width ||
+          y < 0 ||
+          y >= playerMask.height
         ) {
           return false;
         }
 
         return (
-          player.pixels[
-            maskY * player.width + maskX
-          ] === 255
+          playerMask.pixels[
+            y * playerMask.width + x
+          ] === 1
         );
       }
 
-      /*
-        Test active-laser samples against real body-mask pixels.
-      */
-      function laserHitsPlayer(laserObject) {
-        if (!player.tracked || !player.pixels) {
-          return false;
-        }
-
-        const sampleStep = 7;
+      function laserHitsPerson(currentLaser) {
+        const step = 8;
         const halfThickness =
-          laserObject.thickness / 2;
+          currentLaser.thickness / 2;
 
-        if (
-          laserObject.orientation ===
-          "horizontal"
-        ) {
-          const y = laserObject.linePosition;
-
+        if (currentLaser.horizontal) {
           for (
             let x = 0;
             x < window.innerWidth;
-            x += sampleStep
+            x += step
           ) {
             for (
               let offset = -halfThickness;
               offset <= halfThickness;
-              offset += 6
+              offset += 7
             ) {
               if (
-                bodyMaskContainsScreenPoint(
+                maskHasPersonAt(
                   x,
-                  y + offset
+                  currentLaser.position + offset
                 )
               ) {
                 return true;
@@ -860,21 +649,19 @@
           return false;
         }
 
-        const x = laserObject.linePosition;
-
         for (
           let y = 0;
           y < window.innerHeight;
-          y += sampleStep
+          y += step
         ) {
           for (
             let offset = -halfThickness;
             offset <= halfThickness;
-            offset += 6
+            offset += 7
           ) {
             if (
-              bodyMaskContainsScreenPoint(
-                x + offset,
+              maskHasPersonAt(
+                currentLaser.position + offset,
                 y
               )
             ) {
@@ -886,22 +673,25 @@
         return false;
       }
 
-      function drawBodyMask() {
-        if (!player.tracked || !player.pixels) {
+      function drawMask() {
+        if (
+          !playerVisible ||
+          !playerMask.pixels
+        ) {
           return;
         }
 
         ctx.save();
 
-        ctx.globalAlpha = 0.78;
+        ctx.globalAlpha = 0.76;
         ctx.imageSmoothingEnabled = true;
 
         ctx.drawImage(
           maskCanvas,
           0,
           0,
-          player.width,
-          player.height,
+          playerMask.width,
+          playerMask.height,
           0,
           0,
           window.innerWidth,
@@ -916,159 +706,73 @@
           return;
         }
 
-        const elapsed =
-          performance.now() - laser.createdAt;
-
+        const elapsed = performance.now() - laser.createdAt;
         const warning = !laser.active;
-
-        const warningProgress = warning
-          ? Math.min(
-              1,
-              elapsed / laser.warningTime
-            )
-          : 1;
-
-        const pulse =
-          0.62 +
-          Math.sin(performance.now() / 75) * 0.25;
 
         ctx.save();
 
-        if (
-          laser.orientation ===
-          "horizontal"
-        ) {
-          const y = laser.linePosition;
+        if (warning) {
+          const opacity =
+            0.30 +
+            0.40 *
+            Math.min(1, elapsed / laser.warningMs);
 
-          if (warning) {
-            ctx.strokeStyle =
-              `rgba(255, 88, 88, ${
-                0.30 + warningProgress * 0.40
-              })`;
+          ctx.strokeStyle =
+            `rgba(255, 92, 92, ${opacity})`;
 
-            ctx.lineWidth = 3;
-            ctx.setLineDash([10, 9]);
-
-            ctx.beginPath();
-            ctx.moveTo(0, y);
-            ctx.lineTo(window.innerWidth, y);
-            ctx.stroke();
-
-            ctx.setLineDash([]);
-
-            ctx.fillStyle = "#ffe1dc";
-            ctx.font = "bold 13px Arial";
-            ctx.textAlign = "center";
-
-            ctx.fillText(
-              "LASER LOCKING",
-              window.innerWidth / 2,
-              Math.max(24, y - 16)
-            );
-
-          } else {
-            ctx.strokeStyle =
-              `rgba(255, 24, 48, ${pulse})`;
-
-            ctx.lineWidth =
-              laser.thickness + 16;
-
-            ctx.shadowColor = "#ff1732";
-            ctx.shadowBlur = 28;
-
-            ctx.beginPath();
-            ctx.moveTo(0, y);
-            ctx.lineTo(window.innerWidth, y);
-            ctx.stroke();
-
-            ctx.shadowBlur = 0;
-            ctx.strokeStyle = "#fff2f2";
-            ctx.lineWidth = 3;
-
-            ctx.beginPath();
-            ctx.moveTo(0, y);
-            ctx.lineTo(window.innerWidth, y);
-            ctx.stroke();
-          }
+          ctx.lineWidth = 3;
+          ctx.setLineDash([10, 9]);
 
         } else {
-          const x = laser.linePosition;
+          ctx.strokeStyle = "#ff1633";
+          ctx.lineWidth = laser.thickness + 16;
+          ctx.shadowColor = "#ff1633";
+          ctx.shadowBlur = 26;
+        }
 
-          if (warning) {
-            ctx.strokeStyle =
-              `rgba(255, 88, 88, ${
-                0.30 + warningProgress * 0.40
-              })`;
+        ctx.beginPath();
 
-            ctx.lineWidth = 3;
-            ctx.setLineDash([10, 9]);
+        if (laser.horizontal) {
+          ctx.moveTo(0, laser.position);
+          ctx.lineTo(window.innerWidth, laser.position);
+        } else {
+          ctx.moveTo(laser.position, 0);
+          ctx.lineTo(laser.position, window.innerHeight);
+        }
 
-            ctx.beginPath();
-            ctx.moveTo(x, 0);
-            ctx.lineTo(x, window.innerHeight);
-            ctx.stroke();
+        ctx.stroke();
 
-            ctx.setLineDash([]);
+        ctx.setLineDash([]);
+        ctx.shadowBlur = 0;
 
-            ctx.save();
+        if (!warning) {
+          ctx.strokeStyle = "#fff4f4";
+          ctx.lineWidth = 3;
 
-            ctx.translate(
-              x - 15,
-              window.innerHeight / 2
-            );
+          ctx.beginPath();
 
-            ctx.rotate(-Math.PI / 2);
-
-            ctx.fillStyle = "#ffe1dc";
-            ctx.font = "bold 13px Arial";
-            ctx.textAlign = "center";
-
-            ctx.fillText(
-              "LASER LOCKING",
-              0,
-              0
-            );
-
-            ctx.restore();
-
+          if (laser.horizontal) {
+            ctx.moveTo(0, laser.position);
+            ctx.lineTo(window.innerWidth, laser.position);
           } else {
-            ctx.strokeStyle =
-              `rgba(255, 24, 48, ${pulse})`;
-
-            ctx.lineWidth =
-              laser.thickness + 16;
-
-            ctx.shadowColor = "#ff1732";
-            ctx.shadowBlur = 28;
-
-            ctx.beginPath();
-            ctx.moveTo(x, 0);
-            ctx.lineTo(x, window.innerHeight);
-            ctx.stroke();
-
-            ctx.shadowBlur = 0;
-            ctx.strokeStyle = "#fff2f2";
-            ctx.lineWidth = 3;
-
-            ctx.beginPath();
-            ctx.moveTo(x, 0);
-            ctx.lineTo(x, window.innerHeight);
-            ctx.stroke();
+            ctx.moveTo(laser.position, 0);
+            ctx.lineTo(laser.position, window.innerHeight);
           }
+
+          ctx.stroke();
         }
 
         ctx.restore();
       }
 
-      function drawWaitingOverlay() {
-        if (playing || gameOver) {
+      function drawWaitingMessage() {
+        if (playerVisible) {
           return;
         }
 
         ctx.save();
 
         ctx.fillStyle = "rgba(0, 0, 0, 0.48)";
-
         ctx.fillRect(
           0,
           window.innerHeight - 70,
@@ -1080,21 +784,10 @@
         ctx.font = "bold 16px Arial";
         ctx.textAlign = "center";
 
-        let message =
-          "LOADING TENSORFLOW PERSON DETECTION…";
-
-        if (segmenter && !player.tracked) {
-          message =
-            "STEP INTO VIEW — LASERS ARE OFF";
-        }
-
-        if (segmenter && player.tracked) {
-          message =
-            "PERSON DETECTED — HOLD FOR TRACKING CONFIRMATION";
-        }
-
         ctx.fillText(
-          message,
+          segmenter
+            ? "STEP INTO VIEW — LASERS ARE OFF"
+            : "LOADING PERSON DETECTION…",
           window.innerWidth / 2,
           window.innerHeight - 30
         );
@@ -1103,14 +796,13 @@
       }
 
       function drawGameOver() {
-        if (!gameOver) {
+        if (health > 0) {
           return;
         }
 
         ctx.save();
 
-        ctx.fillStyle = "rgba(0, 0, 0, 0.72)";
-
+        ctx.fillStyle = "rgba(0, 0, 0, 0.70)";
         ctx.fillRect(
           0,
           0,
@@ -1125,7 +817,7 @@
         ctx.fillText(
           "GAME OVER",
           window.innerWidth / 2,
-          window.innerHeight / 2 - 20
+          window.innerHeight / 2 - 18
         );
 
         ctx.fillStyle = "#ffffff";
@@ -1134,15 +826,15 @@
         ctx.fillText(
           `Final score: ${score}`,
           window.innerWidth / 2,
-          window.innerHeight / 2 + 20
+          window.innerHeight / 2 + 18
         );
 
         ctx.font = "15px Arial";
 
         ctx.fillText(
-          "Refresh the page to play again",
+          "Refresh to play again",
           window.innerWidth / 2,
-          window.innerHeight / 2 + 54
+          window.innerHeight / 2 + 50
         );
 
         ctx.restore();
@@ -1156,18 +848,20 @@
           window.innerHeight
         );
 
-        drawBodyMask();
+        drawMask();
         drawLaser();
-        drawWaitingOverlay();
+        drawWaitingMessage();
         drawGameOver();
       }
 
       function loop(timestamp) {
-        if (!running) {
+        if (!gameRunning) {
+          draw();
+          updateHud();
           return;
         }
 
-        updateSegmentation(timestamp);
+        updatePersonMask(timestamp);
         updateLaser(timestamp);
 
         draw();
@@ -1176,9 +870,9 @@
         requestAnimationFrame(loop);
       }
 
-      permissionButton.addEventListener(
+      allowCameraButton.addEventListener(
         "click",
-        enableCamera
+        allowCamera
       );
 
       window.addEventListener(
@@ -1189,8 +883,8 @@
       window.addEventListener(
         "pagehide",
         () => {
-          if (mediaStream) {
-            mediaStream.getTracks().forEach(
+          if (stream) {
+            stream.getTracks().forEach(
               (track) => track.stop()
             );
           }
