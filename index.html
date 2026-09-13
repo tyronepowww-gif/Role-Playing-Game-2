@@ -1,12 +1,255 @@
 <!DOCTYPE html>
 <html>
-<body>
-<h1>Storm Runner Test</h1>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Storm Runner Test</title>
 
-<script>
-console.log("Working");
-document.body.style.background = "black";
-document.body.style.color = "cyan";
+<style>
+html,body{
+margin:0;
+overflow:hidden;
+background:#020814;
+}
+
+video{
+position:fixed;
+inset:0;
+width:100vw;
+height:100vh;
+object-fit:cover;
+transform:scaleX(-1);
+opacity:.25;
+}
+
+canvas{
+position:fixed;
+inset:0;
+}
+
+#status{
+position:fixed;
+top:10px;
+left:10px;
+padding:10px;
+color:white;
+background:rgba(0,0,0,.6);
+font-family:Arial;
+z-index:10;
+}
+</style>
+</head>
+
+<body>
+
+<video
+id="video"
+autoplay
+playsinline
+muted></video>
+
+<canvas id="game"></canvas>
+
+<div id="status">
+Loading...
+</div>
+
+<script type="module">
+
+import {
+FilesetResolver,
+PoseLandmarker
+}
+from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/+esm";
+
+const video =
+document.getElementById("video");
+
+const canvas =
+document.getElementById("game");
+
+const ctx =
+canvas.getContext("2d");
+
+const status =
+document.getElementById("status");
+
+canvas.width =
+window.innerWidth;
+
+canvas.height =
+window.innerHeight;
+
+let poseLandmarker;
+let lastVideoTime=-1;
+
+const player={
+x:window.innerWidth/2,
+y:window.innerHeight/2
+};
+
+async function setupCamera(){
+
+const stream =
+await navigator.mediaDevices.getUserMedia({
+video:{
+facingMode:"user"
+}
+});
+
+video.srcObject=stream;
+
+await video.play();
+
+status.textContent=
+"Camera Ready";
+}
+
+async function setupPose(){
+
+const vision =
+await FilesetResolver.forVisionTasks(
+"https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm"
+);
+
+poseLandmarker =
+await PoseLandmarker.createFromOptions(
+vision,
+{
+baseOptions:{
+modelAssetPath:
+"https://storage.googleapis.com/mediapipe-models/pose\_landmarker/pose\_landmarker\_full/float16/1/pose\_landmarker\_full.task",
+delegate:"CPU"
+},
+runningMode:"VIDEO",
+numPoses:1
+}
+);
+
+status.textContent=
+"Pose Tracking Active";
+}
+
+function updatePose(){
+
+if(
+!poseLandmarker ||
+video.readyState < 2
+){
+return;
+}
+
+if(
+video.currentTime===
+lastVideoTime
+){
+return;
+}
+
+lastVideoTime=
+video.currentTime;
+
+const result =
+poseLandmarker.detectForVideo(
+video,
+performance.now()
+);
+
+if(
+!result.landmarks ||
+!result.landmarks.length
+){
+return;
+}
+
+const nose =
+result.landmarks[0][0];
+
+if(!nose){
+return;
+}
+
+player.x =
+(1-nose.x) *
+canvas.width;
+
+player.y =
+nose.y *
+canvas.height;
+}
+
+function draw(){
+
+ctx.clearRect(
+0,
+0,
+canvas.width,
+canvas.height
+);
+
+ctx.strokeStyle=
+"#59ffe0";
+
+ctx.lineWidth=4;
+
+ctx.beginPath();
+
+ctx.arc(
+player.x,
+player.y,
+40,
+0,
+Math.PI*2
+);
+
+ctx.stroke();
+
+ctx.fillStyle=
+"cyan";
+
+ctx.beginPath();
+
+ctx.arc(
+player.x,
+player.y,
+10,
+0,
+Math.PI*2
+);
+
+ctx.fill();
+}
+
+function loop(){
+
+updatePose();
+
+draw();
+
+requestAnimationFrame(loop);
+}
+
+(async()=>{
+
+try{
+
+await setupCamera();
+
+await setupPose();
+
+loop();
+
+}catch(err){
+
+console.error(err);
+
+status.textContent=
+"ERROR: " +
+err.message;
+
+}
+
+})();
 </script>
 
 </body>
