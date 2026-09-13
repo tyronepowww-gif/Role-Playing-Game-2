@@ -85,7 +85,6 @@
   <canvas id="canvas"></canvas>
 
   <div id="info">Click Start Camera</div>
-
   <button id="start">Start Camera</button>
 
   <script type="module">
@@ -103,23 +102,13 @@
     let poseLandmarker = null;
     let lastVideoTime = -1;
     let running = false;
-    let animationStarted = false;
+    let cameraStarted = false;
 
     let score = 0;
     let health = 3;
     let projectile = null;
     let lastSpawnTime = 0;
 
-    /*
-      This object is the player hit zone.
-
-      Yellow:
-      Default zone before a person is detected.
-
-      Green:
-      Person detected. Zone is now sized around
-      the head-and-upper-body space of the user.
-    */
     const player = {
       x: window.innerWidth / 2,
       y: window.innerHeight / 2,
@@ -145,36 +134,15 @@
       }
     }
 
-    /*
-      Keep this camera function simple.
-      This button click creates the actual browser
-      camera permission request.
-    */
-    async function startCamera() {
-      const stream =
-      await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: false
-      });
-
-      video.srcObject = stream;
-
-      await video.play();
-    }
-
-    /*
-      Pose tracking is optional to game startup.
-      The game begins whether this succeeds or fails.
-    */
     async function loadPoseTracking() {
+      if (poseLandmarker) return;
+
       try {
-        const vision =
-        await FilesetResolver.forVisionTasks(
+        const vision = await FilesetResolver.forVisionTasks(
           "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm"
         );
 
-        poseLandmarker =
-        await PoseLandmarker.createFromOptions(
+        poseLandmarker = await PoseLandmarker.createFromOptions(
           vision,
           {
             baseOptions: {
@@ -188,22 +156,12 @@
             numPoses: 1
           }
         );
-
-        info.textContent =
-        "Game active. Looking for player.";
-
       } catch (error) {
-        console.error(error);
-
-        info.textContent =
-        "Game active. Tracker did not load; yellow zone stays centered.";
+        console.error("Pose tracker failed to load:", error);
+        poseLandmarker = null;
       }
     }
 
-    /*
-      This does not stop the game if no pose is found.
-      It only changes whether the hit zone follows a person.
-    */
     function updatePersonZone(timestamp) {
       if (
         !poseLandmarker ||
@@ -218,11 +176,7 @@
 
       lastVideoTime = video.currentTime;
 
-      const result =
-      poseLandmarker.detectForVideo(
-        video,
-        timestamp
-      );
+      const result = poseLandmarker.detectForVideo(video, timestamp);
 
       if (!result.landmarks?.length) {
         player.tracked = false;
@@ -234,76 +188,39 @@
       const nose = points[0];
       const leftShoulder = points[11];
       const rightShoulder = points[12];
-      const leftHip = points[23];
-      const rightHip = points[24];
 
       if (!nose || !leftShoulder || !rightShoulder) {
         player.tracked = false;
         return;
       }
 
-      const shoulderCenterX =
-      (leftShoulder.x + rightShoulder.x) / 2;
-
-      const shoulderCenterY =
-      (leftShoulder.y + rightShoulder.y) / 2;
-
-      const shoulderWidth =
-      Math.hypot(
+      const shoulderWidth = Math.hypot(
         rightShoulder.x - leftShoulder.x,
         rightShoulder.y - leftShoulder.y
       );
 
-      /*
-        Camera is visually mirrored.
-        Invert X so Canvas follows the mirrored body.
-      */
-      const targetX =
-      (1 - nose.x) * window.innerWidth;
-
-      const targetY =
-      nose.y * window.innerHeight;
+      const widthPixels = shoulderWidth * window.innerWidth;
 
       /*
-        Use shoulder width to create a person-sized
-        upper-body light border / hit zone.
+        The camera image is mirrored in CSS, so invert
+        the MediaPipe X coordinate to match it on canvas.
       */
-      const widthPixels =
-      shoulderWidth * window.innerWidth;
+      player.x = (1 - nose.x) * window.innerWidth;
+      player.y = nose.y * window.innerHeight;
 
-      player.x = targetX;
-      player.y = targetY;
-
-      player.radiusX =
-      Math.max(55, widthPixels * 0.62);
-
-      player.radiusY =
-      Math.max(80, widthPixels * 0.98);
-
+      player.radiusX = Math.max(55, widthPixels * 0.62);
+      player.radiusY = Math.max(80, widthPixels * 0.98);
       player.tracked = true;
     }
 
     function spawnProjectile() {
-      const fromLeft =
-      Math.random() > 0.5;
-
-      const startX =
-      fromLeft ? -60 : window.innerWidth + 60;
-
+      const fromLeft = Math.random() > 0.5;
+      const startX = fromLeft ? -60 : window.innerWidth + 60;
       const startY =
-      80 +
-      Math.random() *
-      Math.max(80, window.innerHeight - 160);
+        80 + Math.random() * Math.max(80, window.innerHeight - 160);
 
-      /*
-        Lock to the current yellow or green hit zone.
-        The game works either way.
-      */
-      const targetX = player.x;
-      const targetY = player.y;
-
-      const dx = targetX - startX;
-      const dy = targetY - startY;
+      const dx = player.x - startX;
+      const dy = player.y - startY;
       const length = Math.hypot(dx, dy) || 1;
       const speed = 500;
 
@@ -312,8 +229,8 @@
         y: startY,
         vx: (dx / length) * speed,
         vy: (dy / length) * speed,
-        targetX,
-        targetY,
+        targetX: player.x,
+        targetY: player.y,
         radius: 16,
         createdAt: performance.now(),
         warningTime: 700,
@@ -322,20 +239,16 @@
     }
 
     function circleHitsZone(circle, zone) {
-      const radiusX =
-      zone.radiusX + circle.radius;
-
-      const radiusY =
-      zone.radiusY + circle.radius;
+      const radiusX = zone.radiusX + circle.radius;
+      const radiusY = zone.radiusY + circle.radius;
 
       const dx = circle.x - zone.x;
       const dy = circle.y - zone.y;
 
-      const result =
-      (dx * dx) / (radiusX * radiusX) +
-      (dy * dy) / (radiusY * radiusY);
-
-      return result <= 1;
+      return (
+        (dx * dx) / (radiusX * radiusX) +
+        (dy * dy) / (radiusY * radiusY) <= 1
+      );
     }
 
     function projectileOut() {
@@ -360,10 +273,7 @@
       }
 
       if (!projectile.fired) {
-        if (
-          timestamp - projectile.createdAt >=
-          projectile.warningTime
-        ) {
+        if (timestamp - projectile.createdAt >= projectile.warningTime) {
           projectile.fired = true;
         }
 
@@ -382,12 +292,10 @@
         if (health <= 0) {
           running = false;
 
-          info.textContent =
-          `Game Over | Score: ${score}`;
+          info.textContent = `Game Over | Score: ${score}`;
 
-          startButton.textContent =
-          "Restart Game";
-
+          startButton.disabled = false;
+          startButton.textContent = "Restart Game";
           startButton.classList.remove("hidden");
         }
 
@@ -400,29 +308,16 @@
       }
     }
 
-    /*
-      Draw the role-play light border.
-
-      Yellow = no player detected:
-      game still runs, target zone stays center.
-
-      Green = person detected:
-      border follows the tracked person and acts
-      as the real hit zone.
-    */
     function drawPlayerZone() {
-      const color =
-      player.tracked ? "#52ffb7" : "#ffe66d";
+      const color = player.tracked ? "#52ffb7" : "#ffe66d";
 
-      const label =
-      player.tracked
+      const label = player.tracked
         ? "PLAYER HIT ZONE"
         : "DEFAULT HIT ZONE";
 
       ctx.save();
 
-      ctx.fillStyle =
-      player.tracked
+      ctx.fillStyle = player.tracked
         ? "rgba(82,255,183,0.10)"
         : "rgba(255,230,109,0.10)";
 
@@ -430,7 +325,6 @@
       ctx.lineWidth = 4;
 
       ctx.beginPath();
-
       ctx.ellipse(
         player.x,
         player.y,
@@ -440,31 +334,17 @@
         0,
         Math.PI * 2
       );
-
       ctx.fill();
       ctx.stroke();
 
-      /*
-        Small center light.
-      */
       ctx.fillStyle = color;
-
       ctx.beginPath();
-
-      ctx.arc(
-        player.x,
-        player.y,
-        8,
-        0,
-        Math.PI * 2
-      );
-
+      ctx.arc(player.x, player.y, 8, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.fillStyle = "#ffffff";
       ctx.font = "bold 12px Arial";
       ctx.textAlign = "center";
-
       ctx.fillText(
         label,
         player.x,
@@ -485,23 +365,13 @@
         ctx.setLineDash([8, 7]);
 
         ctx.beginPath();
-
-        ctx.moveTo(
-          projectile.x,
-          projectile.y
-        );
-
-        ctx.lineTo(
-          projectile.targetX,
-          projectile.targetY
-        );
-
+        ctx.moveTo(projectile.x, projectile.y);
+        ctx.lineTo(projectile.targetX, projectile.targetY);
         ctx.stroke();
 
         ctx.setLineDash([]);
 
         ctx.beginPath();
-
         ctx.arc(
           projectile.targetX,
           projectile.targetY,
@@ -509,7 +379,6 @@
           0,
           Math.PI * 2
         );
-
         ctx.stroke();
 
         ctx.restore();
@@ -519,9 +388,7 @@
       ctx.save();
 
       ctx.fillStyle = "#51e5ff";
-
       ctx.beginPath();
-
       ctx.arc(
         projectile.x,
         projectile.y,
@@ -529,14 +396,11 @@
         0,
         Math.PI * 2
       );
-
       ctx.fill();
 
       ctx.strokeStyle = "#e2ffff";
       ctx.lineWidth = 2;
-
       ctx.beginPath();
-
       ctx.arc(
         projectile.x,
         projectile.y,
@@ -544,55 +408,36 @@
         0,
         Math.PI * 2
       );
-
       ctx.stroke();
 
       ctx.restore();
     }
 
     function draw() {
-      ctx.clearRect(
-        0,
-        0,
-        window.innerWidth,
-        window.innerHeight
-      );
-
+      ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
       drawPlayerZone();
       drawProjectile();
     }
 
     function updateInfo() {
-      const zoneState =
-      player.tracked
+      const zoneState = player.tracked
         ? "Green: player tracked"
         : "Yellow: game active";
 
       info.textContent =
-      `Score: ${score} | Health: ${health} | ${zoneState}`;
+        `Score: ${score} | Health: ${health} | ${zoneState}`;
     }
 
     function loop(timestamp) {
       if (!running) return;
 
-      const last =
-      loop.lastTime || timestamp;
-
-      const deltaMs = Math.min(
-        timestamp - last,
-        50
-      );
+      const previousTime = loop.lastTime ?? timestamp;
+      const deltaMs = Math.min(timestamp - previousTime, 50);
 
       loop.lastTime = timestamp;
 
       updatePersonZone(timestamp);
-
-      /*
-        Projectiles keep spawning and moving even
-        when player.tracked is false / yellow.
-      */
       updateProjectile(timestamp, deltaMs);
-
       draw();
       updateInfo();
 
@@ -602,18 +447,24 @@
     async function startGame() {
       try {
         startButton.disabled = true;
-        startButton.textContent =
-        "Starting Camera...";
+        startButton.textContent = "Starting Camera...";
 
         /*
-          Native browser permission prompt.
-          Camera turns on before tracking logic.
+          Request the camera only once. Restarting the game
+          continues using the stream already attached to video.
         */
-        await startCamera();
+        if (!cameraStarted) {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false
+          });
 
-        /*
-          Game starts immediately.
-        */
+          video.srcObject = stream;
+          await video.play();
+
+          cameraStarted = true;
+        }
+
         score = 0;
         health = 3;
         projectile = null;
@@ -625,58 +476,43 @@
         player.radiusY = 100;
         player.tracked = false;
 
+        lastVideoTime = -1;
+        loop.lastTime = undefined;
         running = true;
 
         startButton.classList.add("hidden");
 
         info.textContent =
-        "Game active. Yellow zone is active until player tracking begins.";
+          "Game active. Yellow zone is active until player tracking begins.";
 
-        if (!animationStarted) {
-          animationStarted = true;
-          requestAnimationFrame(loop);
-        }
+        requestAnimationFrame(loop);
 
         /*
-          Tracker loads separately.
-          Its success is not required for the game loop.
+          The game works while this loads. If it fails,
+          the yellow center zone remains active.
         */
         loadPoseTracking();
-
       } catch (error) {
         console.error(error);
 
         info.textContent =
-        `Camera error: ${error.name || ""} ${error.message || ""}`;
+          `Camera error: ${error.name || ""} ${error.message || ""}`;
 
         startButton.disabled = false;
-        startButton.textContent =
-        "Try Camera Again";
+        startButton.textContent = "Try Camera Again";
       }
     }
 
-    startButton.addEventListener(
-      "click",
-      startGame
-    );
+    startButton.addEventListener("click", startGame);
+    window.addEventListener("resize", resizeCanvas);
 
-    window.addEventListener(
-      "resize",
-      resizeCanvas
-    );
+    window.addEventListener("beforeunload", () => {
+      const stream = video.srcObject;
 
-    window.addEventListener(
-      "beforeunload",
-      () => {
-        const stream = video.srcObject;
-
-        if (stream) {
-          stream.getTracks().forEach(
-            (track) => track.stop()
-          );
-        }
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
       }
-    );
+    });
 
     resizeCanvas();
   </script>
