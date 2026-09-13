@@ -10,10 +10,6 @@
   <title>Mobility Dodge</title>
 
   <style>
-    :root {
-      color-scheme: dark;
-    }
-
     * {
       box-sizing: border-box;
     }
@@ -29,8 +25,8 @@
     }
 
     #app,
-    video,
-    canvas {
+    #video,
+    #canvas {
       position: fixed;
       inset: 0;
       width: 100%;
@@ -42,7 +38,7 @@
       background: #090909;
     }
 
-    video {
+    #video {
       z-index: 1;
       object-fit: cover;
       transform: scaleX(-1);
@@ -50,7 +46,7 @@
       background: #000;
     }
 
-    canvas {
+    #canvas {
       z-index: 2;
       pointer-events: none;
     }
@@ -70,10 +66,6 @@
       line-height: 1.4;
     }
 
-    /*
-      This is a neutral permission overlay, not an emphasized
-      game-start control. It disappears once access is granted.
-    */
     #permission-panel {
       position: fixed;
       z-index: 10;
@@ -85,7 +77,7 @@
         radial-gradient(
           circle at center,
           rgba(35, 74, 82, 0.45),
-          rgba(0, 0, 0, 0.86) 65%
+          rgba(0, 0, 0, 0.88) 65%
         );
     }
 
@@ -94,7 +86,7 @@
       padding: 24px;
       border: 1px solid rgba(255, 255, 255, 0.18);
       border-radius: 16px;
-      background: rgba(12, 12, 12, 0.94);
+      background: rgba(12, 12, 12, 0.95);
       color: #ffffff;
       text-align: center;
       box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
@@ -113,8 +105,8 @@
     }
 
     #camera-permission {
-      min-width: 190px;
       padding: 13px 18px;
+      min-width: 190px;
       border: 0;
       border-radius: 10px;
       background: #55e6ff;
@@ -144,140 +136,210 @@
     <video id="video" autoplay muted playsinline></video>
     <canvas id="canvas"></canvas>
 
-    <div id="info">Camera permission required</div>
+    <div id="info">Camera access is required.</div>
 
     <section id="permission-panel" aria-live="polite">
       <div id="permission-card">
         <h1>Mobility Dodge</h1>
 
         <p id="permission-message">
-          Allow camera access to use movement tracking.
+          Allow access to your camera to continue.
         </p>
 
         <button id="camera-permission" type="button">
-          Enable Camera
+          Allow Camera
         </button>
       </div>
     </section>
   </main>
 
-  <script type="module">
-    import {
-      FilesetResolver,
-      PoseLandmarker
-    } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/+esm";
+  <script>
+    /*
+      This first script is deliberately NOT a module.
 
-    const video = document.getElementById("video");
-    const canvas = document.getElementById("canvas");
-    const ctx = canvas.getContext("2d");
+      It attaches the click listener immediately, before loading
+      MediaPipe. That means a CDN or MediaPipe error cannot stop
+      the browser camera permission request.
+    */
+    (() => {
+      const video = document.getElementById("video");
+      const canvas = document.getElementById("canvas");
+      const ctx = canvas.getContext("2d");
 
-    const info = document.getElementById("info");
-    const permissionPanel = document.getElementById("permission-panel");
-    const permissionMessage = document.getElementById("permission-message");
-    const permissionButton = document.getElementById("camera-permission");
+      const info = document.getElementById("info");
+      const permissionPanel = document.getElementById("permission-panel");
+      const permissionMessage = document.getElementById("permission-message");
+      const permissionButton = document.getElementById("camera-permission");
 
-    let poseLandmarker = null;
-    let poseLoadPromise = null;
-    let mediaStream = null;
+      let mediaStream = null;
+      let poseLandmarker = null;
+      let poseLoading = false;
 
-    let lastVideoTime = -1;
-    let running = false;
-    let gameOver = false;
+      let lastVideoTime = -1;
+      let running = false;
+      let gameOver = false;
 
-    let score = 0;
-    let health = 3;
-    let projectile = null;
-    let lastSpawnTime = 0;
+      let score = 0;
+      let health = 3;
+      let projectile = null;
+      let lastSpawnTime = 0;
 
-    const player = {
-      x: window.innerWidth / 2,
-      y: window.innerHeight / 2,
-      radiusX: 75,
-      radiusY: 100,
-      tracked: false
-    };
+      const player = {
+        x: window.innerWidth / 2,
+        y: window.innerHeight / 2,
+        radiusX: 75,
+        radiusY: 100,
+        tracked: false
+      };
 
-    function resizeCanvas() {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      function resizeCanvas() {
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
 
-      canvas.width = Math.floor(window.innerWidth * dpr);
-      canvas.height = Math.floor(window.innerHeight * dpr);
+        canvas.width = Math.floor(window.innerWidth * dpr);
+        canvas.height = Math.floor(window.innerHeight * dpr);
 
-      canvas.style.width = `${window.innerWidth}px`;
-      canvas.style.height = `${window.innerHeight}px`;
+        canvas.style.width = `${window.innerWidth}px`;
+        canvas.style.height = `${window.innerHeight}px`;
 
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-      if (!player.tracked) {
+        if (!player.tracked) {
+          player.x = window.innerWidth / 2;
+          player.y = window.innerHeight / 2;
+        }
+      }
+
+      function resetGame() {
+        score = 0;
+        health = 3;
+        projectile = null;
+        lastSpawnTime = performance.now();
+        lastVideoTime = -1;
+        loop.lastTime = undefined;
+
         player.x = window.innerWidth / 2;
         player.y = window.innerHeight / 2;
-      }
-    }
+        player.radiusX = 75;
+        player.radiusY = 100;
+        player.tracked = false;
 
-    function resetGame() {
-      score = 0;
-      health = 3;
-      projectile = null;
-      lastSpawnTime = performance.now();
-      lastVideoTime = -1;
-      loop.lastTime = undefined;
-
-      player.x = window.innerWidth / 2;
-      player.y = window.innerHeight / 2;
-      player.radiusX = 75;
-      player.radiusY = 100;
-      player.tracked = false;
-
-      gameOver = false;
-    }
-
-    async function requestCamera() {
-      if (!window.isSecureContext) {
-        throw new Error(
-          "Camera access requires HTTPS. Use GitHub Pages, not a plain HTTP site."
-        );
+        gameOver = false;
       }
 
-      if (!navigator.mediaDevices?.getUserMedia) {
-        throw new Error(
-          "This browser does not provide camera access through MediaDevices."
-        );
+      function showCameraError(error) {
+        console.error("Camera error:", error);
+
+        permissionButton.disabled = false;
+        permissionButton.textContent = "Try Camera Again";
+
+        let message = "";
+
+        if (!window.isSecureContext) {
+          message =
+            "Camera access needs HTTPS. Open your GitHub Pages URL, not a downloaded file or an HTTP address.";
+        } else if (!navigator.mediaDevices?.getUserMedia) {
+          message =
+            "This browser does not support camera access through MediaDevices.";
+        } else if (error?.name === "NotAllowedError") {
+          message =
+            "The browser blocked camera access. Click the camera or lock icon in the address bar, allow the camera for this site, then try again.";
+        } else if (error?.name === "NotFoundError") {
+          message =
+            "No usable camera was found on this device.";
+        } else if (error?.name === "NotReadableError") {
+          message =
+            "The camera is busy. Close other apps or browser tabs using it, then try again.";
+        } else if (error?.name === "OverconstrainedError") {
+          message =
+            "This camera does not match the requested settings. Try again.";
+        } else {
+          message =
+            `Camera could not start: ${error?.message || error?.name || "Unknown error"}`;
+        }
+
+        permissionMessage.textContent = message;
+        info.textContent = "Camera access has not been granted.";
       }
 
-      if (mediaStream) {
-        return mediaStream;
-      }
+      async function enableCamera(event) {
+        /*
+          getUserMedia happens immediately in this actual click event.
+          Do not await imports, timers, or tracking initialization
+          before this line.
+        */
+        event.preventDefault();
 
-      mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: "user",
-          width: {
-            ideal: 1280
-          },
-          height: {
-            ideal: 720
-          }
-        },
-        audio: false
-      });
+        if (mediaStream) {
+          permissionPanel.classList.add("hidden");
+          return;
+        }
 
-      video.srcObject = mediaStream;
-      await video.play();
+        if (!window.isSecureContext) {
+          showCameraError(
+            new Error("This page is not running in a secure context.")
+          );
+          return;
+        }
 
-      return mediaStream;
-    }
+        if (!navigator.mediaDevices?.getUserMedia) {
+          showCameraError(
+            new Error("navigator.mediaDevices.getUserMedia is unavailable.")
+          );
+          return;
+        }
 
-    async function loadPoseTracking() {
-      if (poseLandmarker) {
-        return poseLandmarker;
-      }
-
-      if (poseLoadPromise) {
-        return poseLoadPromise;
-      }
-
-      poseLoadPromise = (async () => {
         try {
+          permissionButton.disabled = true;
+          permissionButton.textContent = "Requesting Access…";
+          permissionMessage.textContent =
+            "Your browser should now display its camera permission dialog.";
+
+          /*
+            Keep this call simple. Some devices reject strict
+            facingMode or resolution requirements.
+          */
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false
+          });
+
+          mediaStream = stream;
+          video.srcObject = stream;
+
+          await video.play();
+
+          resetGame();
+          running = true;
+
+          permissionPanel.classList.add("hidden");
+
+          info.textContent =
+            "Camera active. Yellow zone is active while tracking loads.";
+
+          requestAnimationFrame(loop);
+
+          loadPoseTracking();
+
+        } catch (error) {
+          showCameraError(error);
+        }
+      }
+
+      async function loadPoseTracking() {
+        if (poseLandmarker || poseLoading) {
+          return;
+        }
+
+        poseLoading = true;
+
+        try {
+          const {
+            FilesetResolver,
+            PoseLandmarker
+          } = await import(
+            "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/+esm"
+          );
+
           const vision = await FilesetResolver.forVisionTasks(
             "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm"
           );
@@ -297,416 +359,377 @@
             }
           );
 
-          return poseLandmarker;
-        } catch (error) {
-          console.warn("Pose tracking failed to load:", error);
-
-          poseLandmarker = null;
-          return null;
-        }
-      })();
-
-      return poseLoadPromise;
-    }
-
-    function updatePersonZone(timestamp) {
-      if (
-        !poseLandmarker ||
-        video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
-      ) {
-        return;
-      }
-
-      if (video.currentTime === lastVideoTime) {
-        return;
-      }
-
-      lastVideoTime = video.currentTime;
-
-      const result = poseLandmarker.detectForVideo(video, timestamp);
-
-      if (!result.landmarks?.length) {
-        player.tracked = false;
-        return;
-      }
-
-      const points = result.landmarks[0];
-
-      const nose = points[0];
-      const leftShoulder = points[11];
-      const rightShoulder = points[12];
-
-      if (!nose || !leftShoulder || !rightShoulder) {
-        player.tracked = false;
-        return;
-      }
-
-      const shoulderWidth = Math.hypot(
-        rightShoulder.x - leftShoulder.x,
-        rightShoulder.y - leftShoulder.y
-      );
-
-      const bodyWidth = shoulderWidth * window.innerWidth;
-
-      /*
-        The visible video is mirrored. Invert MediaPipe's
-        X coordinate so the canvas zone follows correctly.
-      */
-      player.x = (1 - nose.x) * window.innerWidth;
-      player.y = nose.y * window.innerHeight;
-
-      player.radiusX = Math.max(55, bodyWidth * 0.62);
-      player.radiusY = Math.max(80, bodyWidth * 0.98);
-
-      player.tracked = true;
-    }
-
-    function spawnProjectile() {
-      const fromLeft = Math.random() > 0.5;
-
-      const startX = fromLeft
-        ? -60
-        : window.innerWidth + 60;
-
-      const startY =
-        80 +
-        Math.random() *
-        Math.max(80, window.innerHeight - 160);
-
-      const dx = player.x - startX;
-      const dy = player.y - startY;
-      const length = Math.hypot(dx, dy) || 1;
-      const speed = 500;
-
-      projectile = {
-        x: startX,
-        y: startY,
-        vx: (dx / length) * speed,
-        vy: (dy / length) * speed,
-        targetX: player.x,
-        targetY: player.y,
-        radius: 16,
-        createdAt: performance.now(),
-        warningTime: 700,
-        fired: false
-      };
-    }
-
-    function circleHitsZone(circle, zone) {
-      const radiusX = zone.radiusX + circle.radius;
-      const radiusY = zone.radiusY + circle.radius;
-
-      const dx = circle.x - zone.x;
-      const dy = circle.y - zone.y;
-
-      return (
-        (dx * dx) / (radiusX * radiusX) +
-        (dy * dy) / (radiusY * radiusY) <= 1
-      );
-    }
-
-    function projectileOut() {
-      const padding = 110;
-
-      return (
-        projectile.x < -padding ||
-        projectile.x > window.innerWidth + padding ||
-        projectile.y < -padding ||
-        projectile.y > window.innerHeight + padding
-      );
-    }
-
-    function updateProjectile(timestamp, deltaMs) {
-      if (!projectile) {
-        if (timestamp - lastSpawnTime > 1300) {
-          spawnProjectile();
-          lastSpawnTime = timestamp;
-        }
-
-        return;
-      }
-
-      if (!projectile.fired) {
-        if (timestamp - projectile.createdAt >= projectile.warningTime) {
-          projectile.fired = true;
-        }
-
-        return;
-      }
-
-      const dt = deltaMs / 1000;
-
-      projectile.x += projectile.vx * dt;
-      projectile.y += projectile.vy * dt;
-
-      if (circleHitsZone(projectile, player)) {
-        health -= 1;
-        projectile = null;
-
-        if (health <= 0) {
-          gameOver = true;
-          running = false;
-
           info.textContent =
-            `Game over | Score: ${score} | Refresh the page to play again.`;
+            "Camera active. Pose tracking is ready.";
+
+        } catch (error) {
+          console.warn("Pose tracking unavailable:", error);
+
+          /*
+            The game continues using the centered yellow zone.
+          */
+          info.textContent =
+            "Camera active. Tracking unavailable; using yellow center zone.";
+
+        } finally {
+          poseLoading = false;
+        }
+      }
+
+      function updatePersonZone(timestamp) {
+        if (
+          !poseLandmarker ||
+          video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
+        ) {
+          return;
         }
 
-        return;
+        if (video.currentTime === lastVideoTime) {
+          return;
+        }
+
+        lastVideoTime = video.currentTime;
+
+        const result = poseLandmarker.detectForVideo(
+          video,
+          timestamp
+        );
+
+        if (!result.landmarks?.length) {
+          player.tracked = false;
+          return;
+        }
+
+        const points = result.landmarks[0];
+
+        const nose = points[0];
+        const leftShoulder = points[11];
+        const rightShoulder = points[12];
+
+        if (!nose || !leftShoulder || !rightShoulder) {
+          player.tracked = false;
+          return;
+        }
+
+        const shoulderWidth = Math.hypot(
+          rightShoulder.x - leftShoulder.x,
+          rightShoulder.y - leftShoulder.y
+        );
+
+        const bodyWidth = shoulderWidth * window.innerWidth;
+
+        /*
+          Video uses scaleX(-1), so invert the ML X position.
+        */
+        player.x = (1 - nose.x) * window.innerWidth;
+        player.y = nose.y * window.innerHeight;
+
+        player.radiusX = Math.max(55, bodyWidth * 0.62);
+        player.radiusY = Math.max(80, bodyWidth * 0.98);
+        player.tracked = true;
       }
 
-      if (projectile && projectileOut()) {
-        score += 1;
-        projectile = null;
-      }
-    }
+      function spawnProjectile() {
+        const fromLeft = Math.random() > 0.5;
 
-    function drawPlayerZone() {
-      const color = player.tracked ? "#52ffb7" : "#ffe66d";
+        const startX = fromLeft
+          ? -60
+          : window.innerWidth + 60;
 
-      const label = player.tracked
-        ? "PLAYER HIT ZONE"
-        : "DEFAULT HIT ZONE";
+        const startY =
+          80 +
+          Math.random() *
+          Math.max(80, window.innerHeight - 160);
 
-      ctx.save();
+        const dx = player.x - startX;
+        const dy = player.y - startY;
+        const length = Math.hypot(dx, dy) || 1;
+        const speed = 500;
 
-      ctx.fillStyle = player.tracked
-        ? "rgba(82,255,183,0.10)"
-        : "rgba(255,230,109,0.10)";
-
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 4;
-
-      ctx.beginPath();
-
-      ctx.ellipse(
-        player.x,
-        player.y,
-        player.radiusX,
-        player.radiusY,
-        0,
-        0,
-        Math.PI * 2
-      );
-
-      ctx.fill();
-      ctx.stroke();
-
-      ctx.fillStyle = color;
-
-      ctx.beginPath();
-
-      ctx.arc(
-        player.x,
-        player.y,
-        8,
-        0,
-        Math.PI * 2
-      );
-
-      ctx.fill();
-
-      ctx.fillStyle = "#ffffff";
-      ctx.font = "bold 12px Arial";
-      ctx.textAlign = "center";
-
-      ctx.fillText(
-        label,
-        player.x,
-        player.y - player.radiusY - 14
-      );
-
-      ctx.restore();
-    }
-
-    function drawProjectile() {
-      if (!projectile) {
-        return;
+        projectile = {
+          x: startX,
+          y: startY,
+          vx: (dx / length) * speed,
+          vy: (dy / length) * speed,
+          targetX: player.x,
+          targetY: player.y,
+          radius: 16,
+          createdAt: performance.now(),
+          warningTime: 700,
+          fired: false
+        };
       }
 
-      if (!projectile.fired) {
+      function circleHitsZone(circle, zone) {
+        const radiusX = zone.radiusX + circle.radius;
+        const radiusY = zone.radiusY + circle.radius;
+
+        const dx = circle.x - zone.x;
+        const dy = circle.y - zone.y;
+
+        return (
+          (dx * dx) / (radiusX * radiusX) +
+          (dy * dy) / (radiusY * radiusY) <= 1
+        );
+      }
+
+      function projectileOut() {
+        const padding = 110;
+
+        return (
+          projectile.x < -padding ||
+          projectile.x > window.innerWidth + padding ||
+          projectile.y < -padding ||
+          projectile.y > window.innerHeight + padding
+        );
+      }
+
+      function updateProjectile(timestamp, deltaMs) {
+        if (!projectile) {
+          if (timestamp - lastSpawnTime > 1300) {
+            spawnProjectile();
+            lastSpawnTime = timestamp;
+          }
+
+          return;
+        }
+
+        if (!projectile.fired) {
+          if (timestamp - projectile.createdAt >= projectile.warningTime) {
+            projectile.fired = true;
+          }
+
+          return;
+        }
+
+        const dt = deltaMs / 1000;
+
+        projectile.x += projectile.vx * dt;
+        projectile.y += projectile.vy * dt;
+
+        if (circleHitsZone(projectile, player)) {
+          health -= 1;
+          projectile = null;
+
+          if (health <= 0) {
+            running = false;
+            gameOver = true;
+
+            info.textContent =
+              `Game over | Score: ${score} | Refresh to play again.`;
+          }
+
+          return;
+        }
+
+        if (projectile && projectileOut()) {
+          score += 1;
+          projectile = null;
+        }
+      }
+
+      function drawPlayerZone() {
+        const color = player.tracked ? "#52ffb7" : "#ffe66d";
+
+        const label = player.tracked
+          ? "PLAYER HIT ZONE"
+          : "DEFAULT HIT ZONE";
+
         ctx.save();
 
-        ctx.strokeStyle = "#ffdf5c";
-        ctx.lineWidth = 2;
-        ctx.setLineDash([8, 7]);
+        ctx.fillStyle = player.tracked
+          ? "rgba(82,255,183,0.10)"
+          : "rgba(255,230,109,0.10)";
+
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 4;
 
         ctx.beginPath();
 
-        ctx.moveTo(projectile.x, projectile.y);
-
-        ctx.lineTo(
-          projectile.targetX,
-          projectile.targetY
+        ctx.ellipse(
+          player.x,
+          player.y,
+          player.radiusX,
+          player.radiusY,
+          0,
+          0,
+          Math.PI * 2
         );
 
+        ctx.fill();
         ctx.stroke();
 
-        ctx.setLineDash([]);
+        ctx.fillStyle = color;
 
         ctx.beginPath();
 
         ctx.arc(
-          projectile.targetX,
-          projectile.targetY,
-          24,
+          player.x,
+          player.y,
+          8,
+          0,
+          Math.PI * 2
+        );
+
+        ctx.fill();
+
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 12px Arial";
+        ctx.textAlign = "center";
+
+        ctx.fillText(
+          label,
+          player.x,
+          player.y - player.radiusY - 14
+        );
+
+        ctx.restore();
+      }
+
+      function drawProjectile() {
+        if (!projectile) {
+          return;
+        }
+
+        if (!projectile.fired) {
+          ctx.save();
+
+          ctx.strokeStyle = "#ffdf5c";
+          ctx.lineWidth = 2;
+          ctx.setLineDash([8, 7]);
+
+          ctx.beginPath();
+
+          ctx.moveTo(projectile.x, projectile.y);
+
+          ctx.lineTo(
+            projectile.targetX,
+            projectile.targetY
+          );
+
+          ctx.stroke();
+
+          ctx.setLineDash([]);
+
+          ctx.beginPath();
+
+          ctx.arc(
+            projectile.targetX,
+            projectile.targetY,
+            24,
+            0,
+            Math.PI * 2
+          );
+
+          ctx.stroke();
+          ctx.restore();
+
+          return;
+        }
+
+        ctx.save();
+
+        ctx.fillStyle = "#51e5ff";
+
+        ctx.beginPath();
+
+        ctx.arc(
+          projectile.x,
+          projectile.y,
+          projectile.radius,
+          0,
+          Math.PI * 2
+        );
+
+        ctx.fill();
+
+        ctx.strokeStyle = "#e2ffff";
+        ctx.lineWidth = 2;
+
+        ctx.beginPath();
+
+        ctx.arc(
+          projectile.x,
+          projectile.y,
+          projectile.radius + 4,
           0,
           Math.PI * 2
         );
 
         ctx.stroke();
         ctx.restore();
-
-        return;
       }
 
-      ctx.save();
+      function draw() {
+        ctx.clearRect(
+          0,
+          0,
+          window.innerWidth,
+          window.innerHeight
+        );
 
-      ctx.fillStyle = "#51e5ff";
-
-      ctx.beginPath();
-
-      ctx.arc(
-        projectile.x,
-        projectile.y,
-        projectile.radius,
-        0,
-        Math.PI * 2
-      );
-
-      ctx.fill();
-
-      ctx.strokeStyle = "#e2ffff";
-      ctx.lineWidth = 2;
-
-      ctx.beginPath();
-
-      ctx.arc(
-        projectile.x,
-        projectile.y,
-        projectile.radius + 4,
-        0,
-        Math.PI * 2
-      );
-
-      ctx.stroke();
-      ctx.restore();
-    }
-
-    function draw() {
-      ctx.clearRect(
-        0,
-        0,
-        window.innerWidth,
-        window.innerHeight
-      );
-
-      drawPlayerZone();
-      drawProjectile();
-    }
-
-    function updateInfo() {
-      if (gameOver) {
-        return;
+        drawPlayerZone();
+        drawProjectile();
       }
 
-      const trackingStatus = player.tracked
-        ? "Green: player tracked"
-        : "Yellow: default zone";
+      function updateInfo() {
+        if (gameOver) {
+          return;
+        }
 
-      info.textContent =
-        `Score: ${score} | Health: ${health} | ${trackingStatus}`;
-    }
-
-    function loop(timestamp) {
-      if (!running) {
-        return;
-      }
-
-      const previousTime = loop.lastTime ?? timestamp;
-
-      const deltaMs = Math.min(
-        timestamp - previousTime,
-        50
-      );
-
-      loop.lastTime = timestamp;
-
-      updatePersonZone(timestamp);
-      updateProjectile(timestamp, deltaMs);
-      draw();
-      updateInfo();
-
-      requestAnimationFrame(loop);
-    }
-
-    async function enableExperience() {
-      try {
-        permissionButton.disabled = true;
-        permissionMessage.textContent =
-          "Waiting for camera permission…";
-
-        await requestCamera();
-
-        resetGame();
-
-        permissionPanel.classList.add("hidden");
+        const zoneState = player.tracked
+          ? "Green: player tracked"
+          : "Yellow: default zone";
 
         info.textContent =
-          "Camera active. Loading player tracking…";
+          `Score: ${score} | Health: ${health} | ${zoneState}`;
+      }
 
-        running = true;
+      function loop(timestamp) {
+        if (!running) {
+          return;
+        }
+
+        const previousTime = loop.lastTime ?? timestamp;
+
+        const deltaMs = Math.min(
+          timestamp - previousTime,
+          50
+        );
+
+        loop.lastTime = timestamp;
+
+        updatePersonZone(timestamp);
+        updateProjectile(timestamp, deltaMs);
+        draw();
+        updateInfo();
 
         requestAnimationFrame(loop);
-
-        loadPoseTracking();
-
-      } catch (error) {
-        console.error("Camera permission error:", error);
-
-        permissionButton.disabled = false;
-
-        if (error.name === "NotAllowedError") {
-          permissionMessage.textContent =
-            "Camera permission was denied. Use your browser’s site settings to allow the camera, then try again.";
-        } else if (error.name === "NotFoundError") {
-          permissionMessage.textContent =
-            "No camera was found on this device.";
-        } else if (error.name === "NotReadableError") {
-          permissionMessage.textContent =
-            "The camera is already in use by another application or browser tab.";
-        } else {
-          permissionMessage.textContent =
-            error.message ||
-            "Camera access could not be started.";
-        }
-
-        info.textContent =
-          "Camera access has not been granted.";
       }
-    }
 
-    permissionButton.addEventListener(
-      "click",
-      enableExperience
-    );
+      permissionButton.addEventListener(
+        "click",
+        enableCamera
+      );
 
-    window.addEventListener(
-      "resize",
-      resizeCanvas
-    );
+      window.addEventListener(
+        "resize",
+        resizeCanvas
+      );
 
-    window.addEventListener(
-      "pagehide",
-      () => {
-        if (mediaStream) {
-          mediaStream.getTracks().forEach(
-            (track) => track.stop()
-          );
+      window.addEventListener(
+        "pagehide",
+        () => {
+          if (mediaStream) {
+            mediaStream.getTracks().forEach(
+              (track) => track.stop()
+            );
+          }
         }
-      }
-    );
+      );
 
-    resizeCanvas();
+      resizeCanvas();
+    })();
   </script>
 </body>
 </html>
