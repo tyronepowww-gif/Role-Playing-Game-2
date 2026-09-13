@@ -1,453 +1,381 @@
-<canvas id="game"></canvas>
+<!DOCTYPE html>
 
-<script>
-const canvas = document.getElementById("game");
-const ctx = canvas.getContext("2d");
 
-function resize() {
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
+
+
+Storm Runner
+
+
+html,body{
+margin:0;
+overflow:hidden;
+background:#020814;
+font-family:Arial,sans-serif;
+}
+
+canvas{
+display:block;
+}
+
+#hud{
+position:fixed;
+top:10px;
+left:10px;
+color:white;
+background:rgba(0,0,0,.5);
+padding:12px;
+border-radius:12px;
+line-height:1.5;
+font-weight:bold;
+}
+
+#message{
+position:fixed;
+bottom:30px;
+left:50%;
+transform:translateX(-50%);
+color:#7efcff;
+font-size:24px;
+font-weight:bold;
+text-shadow:0 0 15px cyan;
+}
+
+#gameover{
+position:fixed;
+inset:0;
+display:none;
+align-items:center;
+justify-content:center;
+flex-direction:column;
+background:rgba(0,0,0,.8);
+color:white;
+}
+
+button{
+padding:15px 25px;
+font-size:20px;
+cursor:pointer;
+}
+
+
+
+
+
+
+
+AURA: 100%
+COMBO: 0
+SPD: 0
+PL: 0
+
+
+
+
+
+STORM REPORT
+
+RESTART
+
+
+
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+
+function resize(){
+canvas.width=window.innerWidth;
+canvas.height=window.innerHeight;
 }
 
 resize();
+window.addEventListener("resize",resize);
 
-window.addEventListener("resize", resize);
+const auraText=document.getElementById("aura");
+const comboText=document.getElementById("combo");
+const spdText=document.getElementById("spd");
+const plText=document.getElementById("pl");
+const msg=document.getElementById("message");
+const gameover=document.getElementById("gameover");
+const report=document.getElementById("report");
 
-let score = 0;
-let combo = 0;
-let health = 100;
-let level = 1;
-
-let mode = "avoid";
-
-const hand = {
-  x: canvas.width / 2,
-  y: canvas.height / 2
+let player={
+x:window.innerWidth/2,
+y:window.innerHeight/2
 };
 
-const threat = {
-  x: canvas.width,
-  y: canvas.height / 2,
-  speed: 8,
-  radius: 30
+let aura=100;
+let combo=0;
+let bestCombo=0;
+
+let SPD=0;
+let CTRL=0;
+let TAC=0;
+let EVA=0;
+
+let gameRunning=true;
+
+const threat={
+active:false,
+mode:"LEFT",
+x:0,
+y:0,
+speed:10,
+telegraph:1000,
+spawn:0
 };
 
-const counterTarget = {
-  active: false,
-  x: 0,
-  y: 0,
-  radius: 40
-};
+function randomMode(){
 
-function distance(x1, y1, x2, y2) {
-  return Math.hypot(x1 - x2, y1 - y2);
+const pool=[
+"LEFT",
+"RIGHT",
+"DUCK"
+];
+
+threat.mode=
+pool[Math.floor(Math.random()*pool.length)];
+
+threat.active=true;
+
+threat.x=canvas.width+100;
+
+threat.y=
+100+
+Math.random()*
+(canvas.height-200);
+
+threat.spawn=
+performance.now();
 }
 
-function randomMode() {
-  const modes = [
-    "avoid",
-    "deflect",
-    "counter"
-  ];
-
-  mode =
-    modes[
-      Math.floor(
-        Math.random() * modes.length
-      )
-    ];
-
-  threat.x = canvas.width + 120;
-  threat.y = Math.random() * canvas.height;
-
-  counterTarget.active = false;
-
-  threat.speed =
-    8 + level * 0.5;
+function showMessage(text){
+msg.textContent=text;
 }
 
-function failAction() {
-  combo = 0;
-  health -= 10;
+function fail(){
 
-  if (health <= 0) {
-    gameOver();
-  }
+combo=0;
 
-  randomMode();
-}
+aura-=20;
 
-function success(points) {
-  combo++;
+if(aura<=0){
 
-  const bonus =
-    Math.floor(combo / 5) * 5;
+gameRunning=false;
 
-  score += points + bonus;
-
-  level =
-    1 + Math.floor(score / 100);
-
-  randomMode();
-}
-
-let running = true;
-
-function gameOver() {
-  running = false;
-}
-
-function update() {
-
-  if (!running) return;
-
-  threat.x -= threat.speed;
-
-  const d = distance(
-    hand.x,
-    hand.y,
-    threat.x,
-    threat.y
-  );
-
-  if (mode === "avoid") {
-
-    if (
-      threat.x <
-      canvas.width * 0.25
-    ) {
-      if (d > 150) {
-        success(10);
-      } else {
-        failAction();
-      }
-    }
-
-    if (threat.x < -100) {
-      success(10);
-    }
-  }
-
-  if (mode === "deflect") {
-
-    if (d < 60) {
-      success(15);
-    }
-
-    if (threat.x < -100) {
-      failAction();
-    }
-  }
-
-  if (mode === "counter") {
-
-    if (
-      !counterTarget.active &&
-      d < 60
-    ) {
-      counterTarget.active = true;
-
-      counterTarget.x =
-        Math.random() *
-        canvas.width;
-
-      counterTarget.y =
-        Math.random() *
-        canvas.height;
-    }
-
-    if (
-      counterTarget.active
-    ) {
-
-      const cd = distance(
-        hand.x,
-        hand.y,
-        counterTarget.x,
-        counterTarget.y
-      );
-
-      if (
-        cd <
-        counterTarget.radius
-      ) {
-        success(30);
-      }
-    }
-
-    if (threat.x < -100) {
-      failAction();
-    }
-  }
-}
-
-function drawBackground() {
-
-  const gradient =
-    ctx.createLinearGradient(
-      0,
-      0,
-      0,
-      canvas.height
-    );
-
-  gradient.addColorStop(
-    0,
-    "#071220"
-  );
-
-  gradient.addColorStop(
-    1,
-    "#01070f"
-  );
-
-  ctx.fillStyle = gradient;
-
-  ctx.fillRect(
-    0,
-    0,
-    canvas.width,
-    canvas.height
-  );
-}
-
-function drawThreat() {
-
-  const glow =
-    ctx.createRadialGradient(
-      threat.x,
-      threat.y,
-      5,
-      threat.x,
-      threat.y,
-      70
-    );
-
-  glow.addColorStop(
-    0,
-    "#ffffff"
-  );
-
-  glow.addColorStop(
-    0.3,
-    "#ff4444"
-  );
-
-  glow.addColorStop(
-    1,
-    "rgba(255,0,0,0)"
-  );
-
-  ctx.fillStyle = glow;
-
-  ctx.beginPath();
-  ctx.arc(
-    threat.x,
-    threat.y,
-    70,
-    0,
-    Math.PI * 2
-  );
-  ctx.fill();
-
-  ctx.fillStyle = "#ff3333";
-
-  ctx.beginPath();
-  ctx.arc(
-    threat.x,
-    threat.y,
-    threat.radius,
-    0,
-    Math.PI * 2
-  );
-
-  ctx.fill();
-}
-
-function drawHand() {
-
-  ctx.fillStyle = "#20e4ff";
-
-  ctx.beginPath();
-  ctx.arc(
-    hand.x,
-    hand.y,
-    22,
-    0,
-    Math.PI * 2
-  );
-
-  ctx.fill();
-
-  ctx.strokeStyle = "#ffffff";
-  ctx.lineWidth = 2;
-
-  ctx.stroke();
-}
-
-function drawCounterTarget() {
-
-  if (
-    !counterTarget.active
-  ) return;
-
-  ctx.strokeStyle =
-    "#00ff88";
-
-  ctx.lineWidth = 4;
-
-  ctx.beginPath();
-
-  ctx.arc(
-    counterTarget.x,
-    counterTarget.y,
-    counterTarget.radius,
-    0,
-    Math.PI * 2
-  );
-
-  ctx.stroke();
-}
-
-function drawHUD() {
-
-  ctx.fillStyle =
-    "rgba(0,0,0,0.5)";
-
-  ctx.fillRect(
-    10,
-    10,
-    320,
-    140
-  );
-
-  ctx.fillStyle = "white";
-
-  ctx.font =
-    "24px Arial";
-
-  ctx.fillText(
-    "Score: " + score,
-    20,
-    40
-  );
-
-  ctx.fillText(
-    "Combo: " + combo,
-    20,
-    75
-  );
-
-  ctx.fillText(
-    "Level: " + level,
-    20,
-    110
-  );
-
-  ctx.fillText(
-    "Mode: " +
-      mode.toUpperCase(),
-    20,
-    145
-  );
-
-  ctx.fillStyle =
-    health > 30
-      ? "#00ff88"
-      : "#ff4444";
-
-  ctx.fillRect(
-    350,
-    20,
-    health * 2,
-    25
-  );
-
-  ctx.strokeStyle =
-    "white";
-
-  ctx.strokeRect(
-    350,
-    20,
-    200,
-    25
-  );
-}
-
-function drawGameOver() {
-
-  ctx.fillStyle =
-    "rgba(0,0,0,0.75)";
-
-  ctx.fillRect(
-    0,
-    0,
-    canvas.width,
-    canvas.height
-  );
-
-  ctx.fillStyle = "#ffffff";
-
-  ctx.textAlign =
-    "center";
-
-  ctx.font =
-    "bold 60px Arial";
-
-  ctx.fillText(
-    "GAME OVER",
-    canvas.width / 2,
-    canvas.height / 2
-  );
-
-  ctx.font =
-    "24px Arial";
-
-  ctx.fillText(
-    "Final Score: " +
-      score,
-    canvas.width / 2,
-    canvas.height / 2 + 60
-  );
-}
-
-function draw() {
-
-  drawBackground();
-
-  drawThreat();
-
-  drawHand();
-
-  drawCounterTarget();
-
-  drawHUD();
-
-  if (!running) {
-    drawGameOver();
-  }
-}
-
-function loop() {
-
-  update();
-
-  draw();
-
-  requestAnimationFrame(
-    loop
-  );
-}
-
-window.addEventListener(
-  "mousemove",
-  (e) => {
-    hand.x = e.clientX;
-    hand.y = e.clientY;
-  }
+const combatPL=Math.round(
+SPD*.25+
+CTRL*.20+
+TAC*.25+
+EVA*.30
 );
 
-randomMode();
+report.innerHTML=
+`
+Combat PL: ${combatPL}<ms-copilot-line-break>
+Best Combo: ${bestCombo}
+`;
 
-loop();
-</script>
+gameover.style.display="flex";
+}
+}
+
+function success(reaction){
+
+combo++;
+
+bestCombo=
+Math.max(bestCombo,combo);
+
+SPD=
+Math.round(
+1000-Math.min(reaction,1000)
+);
+
+CTRL=
+70+Math.random()*30;
+
+TAC=
+70+Math.random()*30;
+
+EVA=
+Math.min(100,EVA+2);
+
+randomMode();
+}
+
+function drawPlayer(){
+
+ctx.strokeStyle="#59ffe0";
+ctx.lineWidth=4;
+
+ctx.beginPath();
+ctx.arc(
+player.x,
+player.y,
+40,
+0,
+Math.PI*2
+);
+
+ctx.stroke();
+
+ctx.fillStyle="cyan";
+
+ctx.beginPath();
+
+ctx.arc(
+player.x,
+player.y,
+10,
+0,
+Math.PI*2
+);
+
+ctx.fill();
+}
+
+function drawThreat(){
+
+if(!threat.active)return;
+
+const telegraphElapsed=
+performance.now()-threat.spawn;
+
+if(telegraphElapsed<threat.telegraph){
+
+ctx.strokeStyle="yellow";
+
+ctx.lineWidth=4;
+
+ctx.setLineDash([10,10]);
+
+ctx.beginPath();
+
+ctx.moveTo(
+threat.x,
+threat.y
+);
+
+ctx.lineTo(
+player.x,
+player.y
+);
+
+ctx.stroke();
+
+ctx.setLineDash([]);
+
+showMessage(
+"DODGE " + threat.mode
+);
+
+return;
+}
+
+ctx.fillStyle="#ff5151";
+
+ctx.beginPath();
+
+ctx.arc(
+threat.x,
+threat.y,
+25,
+0,
+Math.PI*2
+);
+
+ctx.fill();
+
+threat.x-=threat.speed;
+
+const dist=Math.hypot(
+player.x-threat.x,
+player.y-threat.y
+);
+
+if(dist<60){
+
+fail();
+
+randomMode();
+}
+
+if(threat.x<-100){
+
+success(
+performance.now()-threat.spawn
+);
+
+}
+}
+
+function drawAura(){
+
+const radius=
+60+
+Math.sin(
+performance.now()/100
+)*5;
+
+ctx.strokeStyle=
+`rgba(0,255,255,${
+aura/100
+})`;
+
+ctx.lineWidth=3;
+
+ctx.beginPath();
+
+ctx.arc(
+player.x,
+player.y,
+radius,
+0,
+Math.PI*2
+);
+
+ctx.stroke();
+}
+
+function updateHud(){
+
+auraText.textContent=aura;
+comboText.textContent=combo;
+spdText.textContent=SPD;
+
+const pl=Math.round(
+SPD*.25+
+CTRL*.20+
+TAC*.25+
+EVA*.30
+);
+
+plText.textContent=pl;
+}
+
+function loop(){
+
+if(gameRunning){
+
+ctx.clearRect(
+0,
+0,
+canvas.width,
+canvas.height
+);
+
+drawAura();
+
+drawPlayer();
+
+drawThreat();
+
+updateHud();
+}
+
+requestAnimationFrame(loop);
+}
+
+function restart(){
+
+aura=100;
+combo=
