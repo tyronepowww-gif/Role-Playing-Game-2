@@ -1,0 +1,1656 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"
+  />
+  <meta name="theme-color" content="#030817" />
+  <title>Storm Runner — Dodge Game</title>
+
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family:
+        Inter, system-ui, -apple-system, BlinkMacSystemFont,
+        "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      min-height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 50% 0%, #153568 0%, #071126 40%, #01030a 100%);
+    }
+
+    body {
+      min-height: 100dvh;
+    }
+
+    #video,
+    #canvas,
+    .scanlines,
+    .vignette {
+      position: absolute;
+      inset: 0;
+      width: 100vw;
+      height: 100dvh;
+    }
+
+    #video {
+      z-index: 1;
+      object-fit: cover;
+      transform: scaleX(-1);
+      filter:
+        brightness(0.62)
+        contrast(1.1)
+        saturate(0.75)
+        hue-rotate(165deg);
+    }
+
+    #canvas {
+      z-index: 2;
+      pointer-events: none;
+    }
+
+    .scanlines {
+      z-index: 3;
+      pointer-events: none;
+      opacity: 0.3;
+      background:
+        repeating-linear-gradient(
+          to bottom,
+          rgba(255, 255, 255, 0.018) 0,
+          rgba(255, 255, 255, 0.018) 1px,
+          transparent 1px,
+          transparent 4px
+        );
+    }
+
+    .vignette {
+      z-index: 3;
+      pointer-events: none;
+      background:
+        radial-gradient(
+          ellipse at center,
+          transparent 36%,
+          rgba(0, 0, 0, 0.18) 72%,
+          rgba(0, 0, 0, 0.66) 100%
+        );
+    }
+
+    #hud {
+      position: absolute;
+      z-index: 5;
+      top: max(14px, env(safe-area-inset-top));
+      left: 14px;
+      right: 14px;
+      display: none;
+      gap: 9px;
+      pointer-events: none;
+      text-shadow: 0 2px 10px rgba(0, 0, 0, 0.9);
+    }
+
+    .hud-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .hud-card {
+      border: 1px solid rgba(103, 229, 255, 0.26);
+      border-radius: 10px;
+      background: rgba(2, 13, 37, 0.68);
+      padding: 9px 11px;
+      backdrop-filter: blur(10px);
+    }
+
+    .label {
+      display: block;
+      color: #88edff;
+      font-size: 9px;
+      font-weight: 900;
+      letter-spacing: 0.13em;
+    }
+
+    .hud-card strong {
+      display: block;
+      margin-top: 3px;
+      color: #f2ffff;
+      font-size: 16px;
+    }
+
+    #aura-card {
+      width: 150px;
+    }
+
+    #aura-meter {
+      height: 7px;
+      margin-top: 7px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(104, 255, 197, 0.15);
+    }
+
+    #aura-fill {
+      width: 100%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #48e7a8, #c2ffdf);
+      box-shadow: 0 0 12px #4cffaa;
+      transition: width 130ms linear;
+    }
+
+    #stat-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+    }
+
+    #stat-row .hud-card {
+      padding: 7px 4px;
+      text-align: center;
+    }
+
+    #stat-row .hud-card strong {
+      font-size: 13px;
+    }
+
+    #movement-card {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+
+    #movement-value {
+      color: #cbffe9;
+      font-size: 13px;
+      letter-spacing: 0.06em;
+    }
+
+    #tracking-value {
+      color: #c5d8ef;
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    #message {
+      position: absolute;
+      z-index: 7;
+      bottom: max(20px, calc(env(safe-area-inset-bottom) + 10px));
+      left: 50%;
+      max-width: calc(100vw - 36px);
+      padding: 10px 14px;
+      border: 1px solid rgba(106, 235, 255, 0.28);
+      border-radius: 999px;
+      background: rgba(2, 12, 34, 0.82);
+      color: #eaffff;
+      font-size: 12px;
+      font-weight: 850;
+      text-align: center;
+      transform: translateX(-50%);
+      backdrop-filter: blur(12px);
+    }
+
+    .overlay {
+      position: absolute;
+      z-index: 10;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 18px;
+      background: rgba(2, 7, 21, 0.34);
+      backdrop-filter: blur(5px);
+    }
+
+    .panel {
+      width: min(100%, 410px);
+      padding: 24px;
+      border: 1px solid rgba(108, 231, 255, 0.28);
+      border-radius: 20px;
+      background:
+        linear-gradient(
+          145deg,
+          rgba(16, 50, 91, 0.95),
+          rgba(2, 9, 27, 0.96)
+        );
+      box-shadow:
+        0 26px 76px rgba(0, 0, 0, 0.66),
+        inset 0 0 35px rgba(66, 171, 255, 0.1);
+      text-align: center;
+    }
+
+    .eyebrow {
+      margin: 0 0 8px;
+      color: #80efff;
+      font-size: 10px;
+      font-weight: 900;
+      letter-spacing: 0.15em;
+    }
+
+    h1,
+    h2 {
+      margin: 0;
+      color: #f3ffff;
+      letter-spacing: -0.05em;
+    }
+
+    h1 {
+      font-size: clamp(35px, 11vw, 48px);
+      line-height: 1;
+    }
+
+    h2 {
+      font-size: 29px;
+    }
+
+    .panel-copy {
+      margin: 13px 0 20px;
+      color: #bfd4ea;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .instruction-list {
+      display: grid;
+      gap: 8px;
+      margin: 17px 0 20px;
+      text-align: left;
+    }
+
+    .instruction-list div {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: #d3e3f2;
+      font-size: 13px;
+    }
+
+    .instruction-list b {
+      display: grid;
+      width: 24px;
+      height: 24px;
+      place-items: center;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #4feee1, #5ea8ff);
+      color: #041222;
+      font-size: 10px;
+    }
+
+    button {
+      width: 100%;
+      padding: 14px 16px;
+      border: 0;
+      border-radius: 12px;
+      background: linear-gradient(135deg, #4ef0de, #5ba9ff);
+      color: #031224;
+      cursor: pointer;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 900;
+      letter-spacing: 0.03em;
+      box-shadow: 0 8px 27px rgba(67, 211, 255, 0.28);
+    }
+
+    button:disabled {
+      cursor: wait;
+      opacity: 0.7;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    #calibration-panel {
+      align-self: end;
+      margin-bottom: 66px;
+    }
+
+    #calibration-bar {
+      height: 10px;
+      margin-top: 20px;
+      overflow: hidden;
+      border: 1px solid rgba(103, 233, 255, 0.3);
+      border-radius: 999px;
+      background: rgba(98, 226, 255, 0.11);
+    }
+
+    #calibration-fill {
+      width: 0;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #55c8ff, #5dffd0);
+      box-shadow: 0 0 14px #5ce8ff;
+      transition: width 100ms linear;
+    }
+
+    #calibration-percent {
+      display: block;
+      margin-top: 8px;
+      color: #e7ffff;
+      font-size: 17px;
+    }
+
+    #result-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+      margin: 19px 0;
+    }
+
+    #result-grid article {
+      padding: 12px 7px;
+      border: 1px solid rgba(104, 229, 255, 0.17);
+      border-radius: 10px;
+      background: rgba(3, 16, 43, 0.68);
+    }
+
+    #result-grid span {
+      display: block;
+      color: #8eeeff;
+      font-size: 8px;
+      font-weight: 900;
+      letter-spacing: 0.1em;
+    }
+
+    #result-grid strong {
+      display: block;
+      margin-top: 4px;
+      color: #edffff;
+      font-size: 19px;
+    }
+
+    @media (max-width: 460px) {
+      .overlay {
+        padding: 15px;
+      }
+
+      .panel {
+        padding: 22px;
+      }
+
+      #stat-row .hud-card strong {
+        font-size: 12px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <video id="video" autoplay muted playsinline></video>
+  <canvas id="canvas"></canvas>
+
+  <div class="scanlines"></div>
+  <div class="vignette"></div>
+
+  <section id="hud">
+    <div class="hud-top">
+      <article class="hud-card">
+        <span class="label">SCOUTER SYSTEM</span>
+        <strong>STORM RUNNER</strong>
+      </article>
+
+      <article id="aura-card" class="hud-card">
+        <span class="label">AURA STABILITY</span>
+        <div id="aura-meter">
+          <div id="aura-fill"></div>
+        </div>
+        <strong id="aura-value">100%</strong>
+      </article>
+    </div>
+
+    <div id="stat-row">
+      <article class="hud-card">
+        <span class="label">TIME</span>
+        <strong id="time-value">0.0s</strong>
+      </article>
+
+      <article class="hud-card">
+        <span class="label">DODGES</span>
+        <strong id="dodges-value">0</strong>
+      </article>
+
+      <article class="hud-card">
+        <span class="label">COMBO</span>
+        <strong id="combo-value">x0</strong>
+      </article>
+
+      <article class="hud-card">
+        <span class="label">SPD</span>
+        <strong id="reaction-value">--</strong>
+      </article>
+    </div>
+
+    <article id="movement-card" class="hud-card">
+      <div>
+        <span class="label">MOVE</span>
+        <strong id="movement-value">NEUTRAL</strong>
+      </div>
+
+      <div>
+        <span class="label">TRACK</span>
+        <strong id="tracking-value">--%</strong>
+      </div>
+    </article>
+  </section>
+
+  <div id="message">Initialize the scouter system.</div>
+
+  <section id="menu-screen" class="overlay">
+    <div class="panel">
+      <p class="eyebrow">PHONE CAMERA DODGE TRAINER</p>
+      <h1>Storm Runner</h1>
+      <p class="panel-copy">
+        Wind blades lock onto your current position. Slip, duck, or lean
+        before they arrive. Your head and shoulders are the hitbox.
+      </p>
+
+      <div class="instruction-list">
+        <div><b>01</b><span>Keep your head and shoulders visible.</span></div>
+        <div><b>02</b><span>Hold still for a short neutral-stance scan.</span></div>
+        <div><b>03</b><span>Move only after the warning line appears.</span></div>
+      </div>
+
+      <button id="start-button">Start Camera & Calibrate</button>
+    </div>
+  </section>
+
+  <section id="calibration-screen" class="overlay hidden">
+    <div id="calibration-panel" class="panel">
+      <p class="eyebrow">CALIBRATION SEQUENCE</p>
+      <h2 id="calibration-title">Find Neutral Stance</h2>
+      <p id="calibration-copy" class="panel-copy">
+        Face the camera and keep your head plus both shoulders in frame.
+      </p>
+
+      <div id="calibration-bar">
+        <div id="calibration-fill"></div>
+      </div>
+
+      <strong id="calibration-percent">0%</strong>
+    </div>
+  </section>
+
+  <section id="result-screen" class="overlay hidden">
+    <div class="panel">
+      <p class="eyebrow">STORM REPORT</p>
+      <h2>Run Complete</h2>
+
+      <div id="result-grid">
+        <article>
+          <span>SURVIVAL</span>
+          <strong id="result-time">0.0s</strong>
+        </article>
+
+        <article>
+          <span>DODGES</span>
+          <strong id="result-dodges">0</strong>
+        </article>
+
+        <article>
+          <span>BEST COMBO</span>
+          <strong id="result-combo">x0</strong>
+        </article>
+
+        <article>
+          <span>REACTION</span>
+          <strong id="result-reaction">--</strong>
+        </article>
+      </div>
+
+      <button id="restart-button">Run Again</button>
+    </div>
+  </section>
+
+  <script type="module">
+    import {
+      FilesetResolver,
+      PoseLandmarker
+    } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22";
+
+    /*
+      MediaPipe pose landmarks used:
+      0  = nose
+      11 = left shoulder
+      12 = right shoulder
+    */
+
+    const video = document.querySelector("#video");
+    const canvas = document.querySelector("#canvas");
+    const ctx = canvas.getContext("2d");
+
+    const menuScreen = document.querySelector("#menu-screen");
+    const calibrationScreen = document.querySelector("#calibration-screen");
+    const resultScreen = document.querySelector("#result-screen");
+
+    const startButton = document.querySelector("#start-button");
+    const restartButton = document.querySelector("#restart-button");
+
+    const hud = document.querySelector("#hud");
+    const message = document.querySelector("#message");
+
+    const auraFill = document.querySelector("#aura-fill");
+    const auraValue = document.querySelector("#aura-value");
+    const timeValue = document.querySelector("#time-value");
+    const dodgesValue = document.querySelector("#dodges-value");
+    const comboValue = document.querySelector("#combo-value");
+    const reactionValue = document.querySelector("#reaction-value");
+    const movementValue = document.querySelector("#movement-value");
+    const trackingValue = document.querySelector("#tracking-value");
+
+    const calibrationTitle = document.querySelector("#calibration-title");
+    const calibrationCopy = document.querySelector("#calibration-copy");
+    const calibrationFill = document.querySelector("#calibration-fill");
+    const calibrationPercent = document.querySelector("#calibration-percent");
+
+    const resultTime = document.querySelector("#result-time");
+    const resultDodges = document.querySelector("#result-dodges");
+    const resultCombo = document.querySelector("#result-combo");
+    const resultReaction = document.querySelector("#result-reaction");
+
+    const STATE = {
+      MENU: "MENU",
+      CALIBRATING: "CALIBRATING",
+      PLAYING: "PLAYING",
+      RESULTS: "RESULTS"
+    };
+
+    const LANDMARK = {
+      NOSE: 0,
+      LEFT_SHOULDER: 11,
+      RIGHT_SHOULDER: 12
+    };
+
+    const CONFIG = {
+      calibrationDurationMs: 2500,
+      minimumCalibrationSamples: 25,
+      minimumTrackingConfidence: 0.48,
+
+      slipThreshold: 0.17,
+      duckThreshold: 0.18,
+      leanThresholdDegrees: 12,
+
+      projectileRadius: 13,
+      projectileMargin: 110,
+      initialSpawnDelayMs: 1000,
+
+      auraStart: 100,
+      auraDamage: 25,
+
+      playerRadiusXRatio: 0.27,
+      playerRadiusYRatio: 0.34,
+      playerMinRadiusX: 30,
+      playerMinRadiusY: 38,
+
+      cleanDodgeDistance: 1.55,
+      nearMissDistance: 1.25
+    };
+
+    let appState = STATE.MENU;
+    let poseLandmarker = null;
+    let cameraStarted = false;
+    let lastVideoTime = -1;
+    let lastPose = null;
+    let calibration = null;
+    let currentPlayer = null;
+    let game = null;
+    let lastFrameTime = 0;
+    let animationStarted = false;
+
+    function clamp(value, min, max) {
+      return Math.min(Math.max(value, min), max);
+    }
+
+    function lerp(from, to, amount) {
+      return from + (to - from) * amount;
+    }
+
+    function median(values) {
+      if (!values.length) return null;
+
+      const sorted = [...values].sort((a, b) => a - b);
+      const middle = Math.floor(sorted.length / 2);
+
+      return sorted.length % 2
+        ? sorted[middle]
+        : (sorted[middle - 1] + sorted[middle]) / 2;
+    }
+
+    function distance(a, b) {
+      return Math.hypot(a.x - b.x, a.y - b.y);
+    }
+
+    function angleDegrees(a, b) {
+      return Math.atan2(b.y - a.y, b.x - a.x) * (180 / Math.PI);
+    }
+
+    function normalizeAngle(angle) {
+      let result = angle;
+
+      while (result > 180) result -= 360;
+      while (result < -180) result += 360;
+
+      return result;
+    }
+
+    function resizeCanvas() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+      canvas.width = Math.floor(window.innerWidth * dpr);
+      canvas.height = Math.floor(window.innerHeight * dpr);
+
+      canvas.style.width = `${window.innerWidth}px`;
+      canvas.style.height = `${window.innerHeight}px`;
+
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    function createGame() {
+      return {
+        aura: CONFIG.auraStart,
+        dodges: 0,
+        combo: 0,
+        bestCombo: 0,
+        startedAt: performance.now(),
+        lastSpawnAt: performance.now(),
+        projectiles: [],
+        reactions: [],
+        reactionWatch: null
+      };
+    }
+
+    function resetGame() {
+      game = createGame();
+      currentPlayer = null;
+    }
+
+    function setMessage(text) {
+      message.textContent = text;
+    }
+
+    function showOnly(screen) {
+      menuScreen.classList.add("hidden");
+      calibrationScreen.classList.add("hidden");
+      resultScreen.classList.add("hidden");
+
+      if (screen) {
+        screen.classList.remove("hidden");
+      }
+    }
+
+    function updateHud() {
+      if (!game) return;
+
+      const elapsedSeconds =
+        (performance.now() - game.startedAt) / 1000;
+
+      const reaction = median(game.reactions);
+
+      auraFill.style.width = `${game.aura}%`;
+      auraValue.textContent = `${Math.round(game.aura)}%`;
+      timeValue.textContent = `${elapsedSeconds.toFixed(1)}s`;
+      dodgesValue.textContent = game.dodges;
+      comboValue.textContent = `x${game.combo}`;
+      reactionValue.textContent = reaction
+        ? `${Math.round(reaction)}ms`
+        : "--";
+    }
+
+    async function loadPoseTracking() {
+      const vision = await FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm"
+      );
+
+      poseLandmarker =
+        await PoseLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath:
+              "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+            delegate: "GPU"
+          },
+
+          runningMode: "VIDEO",
+          numPoses: 1,
+
+          minPoseDetectionConfidence: 0.55,
+          minPosePresenceConfidence: 0.55,
+          minTrackingConfidence: 0.55
+        });
+    }
+
+    async function startCamera() {
+      if (cameraStarted) return;
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          facingMode: "user",
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30, max: 60 }
+        }
+      });
+
+      video.srcObject = stream;
+
+      await new Promise((resolve) => {
+        video.onloadedmetadata = resolve;
+      });
+
+      await video.play();
+      cameraStarted = true;
+    }
+
+    function smoothPoint(previous, next, alpha = 0.35) {
+      if (!previous) return next;
+
+      return {
+        ...next,
+        x: lerp(previous.x, next.x, alpha),
+        y: lerp(previous.y, next.y, alpha)
+      };
+    }
+
+    function detectPose(timestamp) {
+      if (
+        !poseLandmarker ||
+        video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
+      ) {
+        return null;
+      }
+
+      if (video.currentTime === lastVideoTime) {
+        return lastPose;
+      }
+
+      lastVideoTime = video.currentTime;
+
+      const detection = poseLandmarker.detectForVideo(
+        video,
+        timestamp
+      );
+
+      if (!detection.landmarks?.length) {
+        lastPose = null;
+        return null;
+      }
+
+      const landmarks = detection.landmarks[0];
+
+      const nose = landmarks[LANDMARK.NOSE];
+      const leftShoulder = landmarks[LANDMARK.LEFT_SHOULDER];
+      const rightShoulder = landmarks[LANDMARK.RIGHT_SHOULDER];
+
+      if (!nose || !leftShoulder || !rightShoulder) {
+        lastPose = null;
+        return null;
+      }
+
+      const confidence =
+        ((nose.visibility ?? 1) +
+          (leftShoulder.visibility ?? 1) +
+          (rightShoulder.visibility ?? 1)) /
+        3;
+
+      if (confidence < CONFIG.minimumTrackingConfidence) {
+        lastPose = null;
+        return null;
+      }
+
+      const shoulderMidpoint = {
+        x: (leftShoulder.x + rightShoulder.x) / 2,
+        y: (leftShoulder.y + rightShoulder.y) / 2
+      };
+
+      const shoulderWidth = distance(
+        leftShoulder,
+        rightShoulder
+      );
+
+      if (shoulderWidth < 0.05) {
+        lastPose = null;
+        return null;
+      }
+
+      const rawPose = {
+        nose,
+        shoulders: shoulderMidpoint,
+        shoulderWidth,
+        shoulderAngle: angleDegrees(
+          leftShoulder,
+          rightShoulder
+        ),
+        confidence
+      };
+
+      if (lastPose) {
+        lastPose = {
+          ...rawPose,
+          nose: smoothPoint(lastPose.nose, rawPose.nose),
+          shoulders: smoothPoint(
+            lastPose.shoulders,
+            rawPose.shoulders
+          ),
+          shoulderWidth: lerp(
+            lastPose.shoulderWidth,
+            rawPose.shoulderWidth,
+            0.35
+          ),
+          shoulderAngle: lerp(
+            lastPose.shoulderAngle,
+            rawPose.shoulderAngle,
+            0.35
+          )
+        };
+      } else {
+        lastPose = rawPose;
+      }
+
+      return lastPose;
+    }
+
+    function startCalibration(timestamp) {
+      calibration = {
+        startedAt: timestamp,
+        samples: []
+      };
+
+      appState = STATE.CALIBRATING;
+      hud.style.display = "none";
+      showOnly(calibrationScreen);
+
+      calibrationTitle.textContent = "Find Neutral Stance";
+      calibrationCopy.textContent =
+        "Face the camera and keep your head plus both shoulders in frame.";
+      calibrationFill.style.width = "0%";
+      calibrationPercent.textContent = "0%";
+
+      setMessage("Hold a relaxed neutral stance.");
+    }
+
+    function addCalibrationSample(pose) {
+      calibration.samples.push({
+        noseX: pose.nose.x,
+        noseY: pose.nose.y,
+        shouldersX: pose.shoulders.x,
+        shouldersY: pose.shoulders.y,
+        shoulderWidth: pose.shoulderWidth,
+        shoulderAngle: pose.shoulderAngle
+      });
+    }
+
+    function calibrationProfile() {
+      const samples = calibration.samples;
+
+      const average = (key) =>
+        samples.reduce((sum, sample) => sum + sample[key], 0) /
+        samples.length;
+
+      return {
+        nose: {
+          x: average("noseX"),
+          y: average("noseY")
+        },
+
+        shoulders: {
+          x: average("shouldersX"),
+          y: average("shouldersY")
+        },
+
+        shoulderWidth: average("shoulderWidth"),
+        shoulderAngle: average("shoulderAngle")
+      };
+    }
+
+    function updateCalibration(timestamp, pose) {
+      if (!calibration) return;
+
+      if (!pose) {
+        calibrationTitle.textContent = "Tracking Lost";
+        calibrationCopy.textContent =
+          "Step back slightly. Keep your head and both shoulders visible.";
+        return;
+      }
+
+      addCalibrationSample(pose);
+
+      const progress = clamp(
+        (timestamp - calibration.startedAt) /
+          CONFIG.calibrationDurationMs,
+        0,
+        1
+      );
+
+      calibrationFill.style.width = `${progress * 100}%`;
+      calibrationPercent.textContent =
+        `${Math.round(progress * 100)}%`;
+
+      if (
+        progress >= 1 &&
+        calibration.samples.length >=
+          CONFIG.minimumCalibrationSamples
+      ) {
+        calibration.profile = calibrationProfile();
+        beginGame(timestamp);
+      }
+    }
+
+    function beginGame(timestamp) {
+      resetGame();
+      game.startedAt = timestamp;
+      game.lastSpawnAt =
+        timestamp - CONFIG.initialSpawnDelayMs;
+
+      appState = STATE.PLAYING;
+      hud.style.display = "grid";
+      showOnly(null);
+
+      setMessage("Read the warning line. Move before the wind blade arrives.");
+    }
+
+    function movementFromPose(pose) {
+      if (!pose || !calibration?.profile) {
+        return {
+          label: "NO TRACK",
+          slipX: 0,
+          duckY: 0,
+          leanAngle: 0
+        };
+      }
+
+      const neutral = calibration.profile;
+      const width = neutral.shoulderWidth;
+
+      const slipX =
+        (pose.nose.x - neutral.nose.x) / width;
+
+      const duckY =
+        ((pose.nose.y - neutral.nose.y) +
+          (pose.shoulders.y - neutral.shoulders.y)) /
+        2 /
+        width;
+
+      const leanAngle = normalizeAngle(
+        pose.shoulderAngle - neutral.shoulderAngle
+      );
+
+      const torsoShift =
+        (pose.shoulders.x - neutral.shoulders.x) / width;
+
+      let label = "NEUTRAL";
+
+      if (duckY > CONFIG.duckThreshold) {
+        label = "DUCK";
+      } else if (slipX < -CONFIG.slipThreshold) {
+        label = "SLIP LEFT";
+      } else if (slipX > CONFIG.slipThreshold) {
+        label = "SLIP RIGHT";
+      } else if (
+        leanAngle < -CONFIG.leanThresholdDegrees &&
+        torsoShift < -0.05
+      ) {
+        label = "LEAN LEFT";
+      } else if (
+        leanAngle > CONFIG.leanThresholdDegrees &&
+        torsoShift > 0.05
+      ) {
+        label = "LEAN RIGHT";
+      }
+
+      return {
+        label,
+        slipX,
+        duckY,
+        leanAngle
+      };
+    }
+
+    function playerFromPose(pose, movement) {
+      if (!pose) return null;
+
+      const shoulderPixels = pose.shoulderWidth * window.innerWidth;
+
+      return {
+        x: (1 - pose.nose.x) * window.innerWidth,
+        y: pose.nose.y * window.innerHeight,
+        radiusX: Math.max(
+          CONFIG.playerMinRadiusX,
+          shoulderPixels * CONFIG.playerRadiusXRatio
+        ),
+        radiusY: Math.max(
+          CONFIG.playerMinRadiusY,
+          shoulderPixels * CONFIG.playerRadiusYRatio
+        ),
+        confidence: pose.confidence,
+        movement
+      };
+    }
+
+    function projectileSpeedForTime(from, target, travelSeconds) {
+      const dx = target.x - from.x;
+      const dy = target.y - from.y;
+      const length = Math.hypot(dx, dy) || 1;
+
+      return {
+        vx: (dx / length) * (length / travelSeconds),
+        vy: (dy / length) * (length / travelSeconds)
+      };
+    }
+
+    function chooseEdgeSpawn() {
+      const margin = 80;
+      const edge = Math.floor(Math.random() * 4);
+
+      if (edge === 0) {
+        return {
+          x: -margin,
+          y: window.innerHeight * (0.18 + Math.random() * 0.65)
+        };
+      }
+
+      if (edge === 1) {
+        return {
+          x: window.innerWidth + margin,
+          y: window.innerHeight * (0.18 + Math.random() * 0.65)
+        };
+      }
+
+      if (edge === 2) {
+        return {
+          x: window.innerWidth * (0.18 + Math.random() * 0.64),
+          y: -margin
+        };
+      }
+
+      return {
+        x: window.innerWidth * (0.18 + Math.random() * 0.64),
+        y: window.innerHeight + margin
+      };
+    }
+
+    function spawnProjectile(timestamp) {
+      if (!currentPlayer || !game) return;
+
+      const start = chooseEdgeSpawn();
+
+      const target = {
+        x: currentPlayer.x,
+        y:
+          currentPlayer.y +
+          (Math.random() - 0.5) *
+            currentPlayer.radiusY *
+            0.7
+      };
+
+      const elapsedSeconds =
+        (timestamp - game.startedAt) / 1000;
+
+      const difficulty = clamp(
+        1 + elapsedSeconds / 45,
+        1,
+        2.2
+      );
+
+      const travelTime = Math.max(
+        0.52,
+        1.25 - difficulty * 0.2
+      );
+
+      const speed = projectileSpeedForTime(
+        start,
+        target,
+        travelTime
+      );
+
+      game.projectiles.push({
+        x: start.x,
+        y: start.y,
+        ...speed,
+
+        targetX: target.x,
+        targetY: target.y,
+
+        radius: CONFIG.projectileRadius,
+        createdAt: timestamp,
+        telegraphMs: Math.max(
+          260,
+          680 - difficulty * 100
+        ),
+
+        firedAt: null,
+        active: true,
+        closestDistance: Infinity
+      });
+
+      game.reactionWatch = null;
+    }
+
+    function circleHitsEllipse(circle, ellipse) {
+      const rx = ellipse.radiusX + circle.radius;
+      const ry = ellipse.radiusY + circle.radius;
+
+      const dx = circle.x - ellipse.x;
+      const dy = circle.y - ellipse.y;
+
+      return (
+        (dx * dx) / (rx * rx) +
+          (dy * dy) / (ry * ry) <=
+        1
+      );
+    }
+
+    function ellipseDistance(point, ellipse) {
+      const dx = point.x - ellipse.x;
+      const dy = point.y - ellipse.y;
+
+      return Math.sqrt(
+        (dx * dx) / (ellipse.radiusX * ellipse.radiusX) +
+          (dy * dy) / (ellipse.radiusY * ellipse.radiusY)
+      );
+    }
+
+    function isProjectileOut(projectile) {
+      const m = CONFIG.projectileMargin;
+
+      return (
+        projectile.x < -m ||
+        projectile.x > window.innerWidth + m ||
+        projectile.y < -m ||
+        projectile.y > window.innerHeight + m
+      );
+    }
+
+    function startReactionWatch(timestamp) {
+      if (!currentPlayer || !game) return;
+
+      game.reactionWatch = {
+        startedAt: timestamp,
+        baselineX: currentPlayer.movement.slipX,
+        baselineY: currentPlayer.movement.duckY,
+        found: false
+      };
+    }
+
+    function detectReaction(timestamp) {
+      if (
+        !game?.reactionWatch ||
+        game.reactionWatch.found ||
+        !currentPlayer
+      ) {
+        return;
+      }
+
+      const watch = game.reactionWatch;
+      const elapsed = timestamp - watch.startedAt;
+
+      if (elapsed > 1500) {
+        watch.found = true;
+        return;
+      }
+
+      const dx =
+        currentPlayer.movement.slipX - watch.baselineX;
+
+      const dy =
+        currentPlayer.movement.duckY - watch.baselineY;
+
+      const moved = Math.hypot(dx, dy);
+
+      if (moved >= 0.04) {
+        watch.found = true;
+
+        if (elapsed >= 80 && elapsed <= 1500) {
+          game.reactions.push(elapsed);
+
+          if (game.reactions.length > 30) {
+            game.reactions.shift();
+          }
+        }
+      }
+    }
+
+    function resolveHit(projectile) {
+      projectile.active = false;
+
+      game.aura = Math.max(
+        0,
+        game.aura - CONFIG.auraDamage
+      );
+
+      game.combo = 0;
+      game.reactionWatch = null;
+
+      setMessage(
+        game.aura > 0
+          ? `Impact detected. Aura: ${game.aura}%`
+          : "Aura collapse."
+      );
+
+      if (game.aura <= 0) {
+        endGame();
+      }
+    }
+
+    function resolveDodge(projectile) {
+      projectile.active = false;
+
+      game.dodges += 1;
+      game.combo += 1;
+      game.bestCombo = Math.max(
+        game.bestCombo,
+        game.combo
+      );
+
+      let quality = "DODGE";
+
+      if (
+        projectile.closestDistance >=
+        CONFIG.cleanDodgeDistance
+      ) {
+        quality = "CLEAN DODGE";
+      } else if (
+        projectile.closestDistance >=
+        CONFIG.nearMissDistance
+      ) {
+        quality = "NEAR MISS";
+      }
+
+      setMessage(`${quality} — Combo x${game.combo}`);
+    }
+
+    function updateProjectiles(deltaMs, timestamp) {
+      if (!game || !currentPlayer) return;
+
+      const deltaSeconds = deltaMs / 1000;
+
+      for (const projectile of game.projectiles) {
+        if (!projectile.active) continue;
+
+        if (!projectile.firedAt) {
+          if (
+            timestamp - projectile.createdAt >=
+            projectile.telegraphMs
+          ) {
+            projectile.firedAt = timestamp;
+            startReactionWatch(timestamp);
+          }
+
+          continue;
+        }
+
+        projectile.x += projectile.vx * deltaSeconds;
+        projectile.y += projectile.vy * deltaSeconds;
+
+        const distanceFromPlayer = ellipseDistance(
+          projectile,
+          currentPlayer
+        );
+
+        projectile.closestDistance = Math.min(
+          projectile.closestDistance,
+          distanceFromPlayer
+        );
+
+        if (circleHitsEllipse(projectile, currentPlayer)) {
+          resolveHit(projectile);
+          continue;
+        }
+
+        if (isProjectileOut(projectile)) {
+          resolveDodge(projectile);
+        }
+      }
+
+      game.projectiles = game.projectiles.filter(
+        (projectile) => projectile.active
+      );
+    }
+
+    function updateGame(timestamp, deltaMs) {
+      if (!game || !currentPlayer) return;
+
+      const elapsed = timestamp - game.startedAt;
+      const difficulty = clamp(1 + elapsed / 45000, 1, 2.2);
+
+      const spawnInterval = Math.max(
+        620,
+        1500 - difficulty * 240
+      );
+
+      if (
+        timestamp - game.lastSpawnAt >=
+        spawnInterval
+      ) {
+        spawnProjectile(timestamp);
+        game.lastSpawnAt = timestamp;
+      }
+
+      detectReaction(timestamp);
+      updateProjectiles(deltaMs, timestamp);
+      updateHud();
+    }
+
+    function drawStormBackground(timestamp) {
+      const phase = timestamp / 700;
+
+      ctx.save();
+      ctx.strokeStyle = "rgba(96, 223, 255, 0.08)";
+      ctx.lineWidth = 1;
+
+      for (let y = 100; y < window.innerHeight; y += 45) {
+        ctx.beginPath();
+
+        for (let x = 0; x <= window.innerWidth; x += 28) {
+          const wave =
+            Math.sin(x * 0.018 + phase + y * 0.01) * 7;
+
+          if (x === 0) {
+            ctx.moveTo(x, y + wave);
+          } else {
+            ctx.lineTo(x, y + wave);
+          }
+        }
+
+        ctx.stroke();
+      }
+
+      ctx.restore();
+    }
+
+    function drawPlayer(player) {
+      if (!player) return;
+
+      ctx.save();
+
+      ctx.fillStyle = "rgba(101, 255, 193, 0.12)";
+      ctx.strokeStyle = "rgba(101, 255, 193, 0.94)";
+      ctx.lineWidth = 2;
+
+      ctx.beginPath();
+      ctx.ellipse(
+        player.x,
+        player.y,
+        player.radiusX,
+        player.radiusY,
+        0,
+        0,
+        Math.PI * 2
+      );
+
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = "#dcfff2";
+      ctx.font = "800 12px system-ui";
+      ctx.textAlign = "center";
+
+      ctx.fillText(
+        player.movement.label,
+        player.x,
+        player.y - player.radiusY - 13
+      );
+
+      ctx.restore();
+    }
+
+    function drawProjectile(projectile, timestamp) {
+      ctx.save();
+
+      if (!projectile.firedAt) {
+        const pulse =
+          0.35 + Math.sin(timestamp / 100) * 0.17;
+
+        ctx.globalAlpha = pulse;
+        ctx.strokeStyle = "#fff3a3";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([7, 7]);
+
+        ctx.beginPath();
+        ctx.moveTo(projectile.x, projectile.y);
+        ctx.lineTo(projectile.targetX, projectile.targetY);
+        ctx.stroke();
+
+        ctx.setLineDash([]);
+
+        ctx.beginPath();
+        ctx.arc(
+          projectile.targetX,
+          projectile.targetY,
+          projectile.radius * 1.7,
+          0,
+          Math.PI * 2
+        );
+
+        ctx.stroke();
+        ctx.restore();
+        return;
+      }
+
+      const direction = Math.atan2(
+        projectile.vy,
+        projectile.vx
+      );
+
+      const tailLength = 60;
+      const tailX =
+        projectile.x - Math.cos(direction) * tailLength;
+      const tailY =
+        projectile.y - Math.sin(direction) * tailLength;
+
+      const trail = ctx.createLinearGradient(
+        tailX,
+        tailY,
+        projectile.x,
+        projectile.y
+      );
+
+      trail.addColorStop(
+        0,
+        "rgba(37, 202, 255, 0)"
+      );
+
+      trail.addColorStop(
+        1,
+        "rgba(90, 239, 255, 0.95)"
+      );
+
+      ctx.strokeStyle = trail;
+      ctx.lineWidth = projectile.radius * 1.2;
+      ctx.lineCap = "round";
+
+      ctx.beginPath();
+      ctx.moveTo(tailX, tailY);
+      ctx.lineTo(projectile.x, projectile.y);
+      ctx.stroke();
+
+      const glow = ctx.createRadialGradient(
+        projectile.x,
+        projectile.y,
+        1,
+        projectile.x,
+        projectile.y,
+        projectile.radius * 2.6
+      );
+
+      glow.addColorStop(0, "#ffffff");
+      glow.addColorStop(0.3, "#caffff");
+      glow.addColorStop(0.6, "#42e6ff");
+      glow.addColorStop(
+        1,
+        "rgba(41, 180, 255, 0)"
+      );
+
+      ctx.fillStyle = glow;
+
+      ctx.beginPath();
+      ctx.arc(
+        projectile.x,
+        projectile.y,
+        projectile.radius * 2.6,
+        0,
+        Math.PI * 2
+      );
+
+      ctx.fill();
+
+      ctx.fillStyle = "#eaffff";
+
+      ctx.beginPath();
+      ctx.arc(
+        projectile.x,
+        projectile.y,
+        projectile.radius * 0.75,
+        0,
+        Math.PI * 2
+      );
+
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    function draw(timestamp) {
+      ctx.clearRect(
+        0,
+        0,
+        window.innerWidth,
+        window.innerHeight
+      );
+
+      drawStormBackground(timestamp);
+
+      if (game) {
+        for (const projectile of game.projectiles) {
+          drawProjectile(projectile, timestamp);
+        }
+      }
+
+      drawPlayer(currentPlayer);
+    }
+
+    function endGame() {
+      if (appState !== STATE.PLAYING) return;
+
+      appState = STATE.RESULTS;
+      hud.style.display = "none";
+
+      const survival =
+        (performance.now() - game.startedAt) / 1000;
+
+      const reaction = median(game.reactions);
+
+      resultTime.textContent = `${survival.toFixed(1)}s`;
+      resultDodges.textContent = game.dodges;
+      resultCombo.textContent = `x${game.bestCombo}`;
+      resultReaction.textContent = reaction
+        ? `${Math.round(reaction)}ms`
+        : "--";
+
+      showOnly(resultScreen);
+    }
+
+    async function startRun() {
+      try {
+        startButton.disabled = true;
+        startButton.textContent = "Loading Camera…";
+
+        if (!poseLandmarker) {
+          await loadPoseTracking();
+        }
+
+        await startCamera();
+
+        resizeCanvas();
+        resetGame();
+
+        if (!animationStarted) {
+          animationStarted = true;
+          requestAnimationFrame(loop);
+        }
+
+        showOnly(calibrationScreen);
+        startCalibration(performance.now());
+      } catch (error) {
+        console.error(error);
+
+        startButton.disabled = false;
+        startButton.textContent = "Try Camera Again";
+
+        setMessage(
+          "Camera failed. Allow camera access and use localhost or HTTPS."
+        );
+      }
+    }
+
+    function restartRun() {
+      resetGame();
+      startCalibration(performance.now());
+    }
+
+    function loop(timestamp) {
+      const deltaMs = Math.min(
+        timestamp - lastFrameTime || 16,
+        50
+      );
+
+      lastFrameTime = timestamp;
+
+      const pose = detectPose(timestamp);
+
+      if (pose) {
+        const movement = movementFromPose(pose);
+        currentPlayer = playerFromPose(pose, movement);
+
+        movementValue.textContent = movement.label;
+        trackingValue.textContent =
+          `${Math.round(pose.confidence * 100)}%`;
+      } else {
+        currentPlayer = null;
+        movementValue.textContent = "NO TRACK";
+        trackingValue.textContent = "0%";
+
+        if (appState === STATE.PLAYING) {
+          setMessage(
+            "Tracking lost. Keep your head and both shoulders visible."
+          );
+        }
+      }
+
+      if (appState === STATE.CALIBRATING) {
+        updateCalibration(timestamp, pose);
+      }
+
+      if (appState === STATE.PLAYING) {
+        updateGame(timestamp, deltaMs);
+      }
+
+      draw(timestamp);
+      requestAnimationFrame(loop);
+    }
+
+    startButton.addEventListener("click", startRun);
+    restartButton.addEventListener("click", restartRun);
+
+    window.addEventListener("resize", resizeCanvas);
+
+    window.addEventListener("beforeunload", () => {
+      const stream = video.srcObject;
+
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+      }
+    });
+
+    resizeCanvas();
+  </script>
+</body>
+</html>
