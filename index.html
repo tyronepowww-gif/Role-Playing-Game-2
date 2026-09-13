@@ -1,375 +1,77 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta
     name="viewport"
-    content="width=device-width,initial-scale=1.0,maximum-scale=1,user-scalable=no"
+    content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"
   />
-  <title>Storm Runner</title>
+  <title>Mobility Dodge</title>
 
   <style>
-    :root {
-      color-scheme: dark;
-      font-family: Arial, Helvetica, sans-serif;
-    }
-
-    * {
-      box-sizing: border-box;
-    }
-
     html,
     body {
+      margin: 0;
       width: 100%;
       height: 100%;
-      margin: 0;
       overflow: hidden;
-      background: #020814;
+      background: #111;
+      font-family: Arial, sans-serif;
     }
 
-    #video,
-    #canvas {
+    video,
+    canvas {
       position: fixed;
       inset: 0;
       width: 100vw;
       height: 100dvh;
     }
 
-    #video {
+    video {
       z-index: 1;
       object-fit: cover;
       transform: scaleX(-1);
-      opacity: 0.38;
-      background: #000;
-      filter:
-        brightness(0.72)
-        contrast(1.08)
-        saturate(0.72)
-        hue-rotate(165deg);
+      opacity: 0.35;
     }
 
-    #canvas {
+    canvas {
       z-index: 2;
       pointer-events: none;
     }
 
-    .scanlines {
+    #info {
       position: fixed;
-      z-index: 3;
-      inset: 0;
-      pointer-events: none;
-      opacity: 0.3;
-      background:
-        repeating-linear-gradient(
-          to bottom,
-          rgba(255, 255, 255, 0.02) 0,
-          rgba(255, 255, 255, 0.02) 1px,
-          transparent 1px,
-          transparent 4px
-        );
-    }
-
-    .vignette {
-      position: fixed;
-      z-index: 3;
-      inset: 0;
-      pointer-events: none;
-      background:
-        radial-gradient(
-          ellipse at center,
-          transparent 35%,
-          rgba(0, 0, 0, 0.2) 72%,
-          rgba(0, 0, 0, 0.68) 100%
-        );
-    }
-
-    #hud {
-      position: fixed;
-      z-index: 6;
-      top: max(12px, env(safe-area-inset-top));
+      z-index: 5;
+      top: 12px;
       left: 12px;
-      right: 12px;
-      display: none;
-      gap: 7px;
-      pointer-events: none;
-      text-shadow: 0 2px 10px rgba(0, 0, 0, 0.95);
-    }
-
-    .hud-top {
-      display: flex;
-      justify-content: space-between;
-      gap: 8px;
-    }
-
-    .hud-card {
-      border: 1px solid rgba(104, 231, 255, 0.28);
-      border-radius: 10px;
-      background: rgba(1, 12, 34, 0.72);
-      padding: 8px 10px;
-      backdrop-filter: blur(8px);
-    }
-
-    .label {
-      display: block;
-      color: #83edff;
-      font-size: 8px;
-      font-weight: 900;
-      letter-spacing: 0.12em;
-    }
-
-    .hud-card strong {
-      display: block;
-      margin-top: 3px;
-      color: #f2ffff;
-      font-size: 14px;
-    }
-
-    #aura-card {
-      width: 145px;
-    }
-
-    #aura-meter {
-      height: 7px;
-      margin-top: 6px;
-      overflow: hidden;
-      border-radius: 999px;
-      background: rgba(96, 255, 190, 0.14);
-    }
-
-    #aura-fill {
-      width: 100%;
-      height: 100%;
-      border-radius: inherit;
-      background: linear-gradient(90deg, #49e7aa, #c3ffdc);
-      box-shadow: 0 0 11px #46ffad;
-      transition: width 120ms linear;
-    }
-
-    #stats {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 6px;
-    }
-
-    #stats .hud-card {
-      padding: 7px 3px;
-      text-align: center;
-    }
-
-    #stats .hud-card strong {
-      font-size: 13px;
-    }
-
-    #movement-card {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    #movement-value {
-      color: #caffea;
-      letter-spacing: 0.04em;
-    }
-
-    #track-value {
-      color: #c8d9f1;
-      font-size: 12px;
-    }
-
-    #status {
-      position: fixed;
-      z-index: 8;
-      bottom: max(17px, calc(env(safe-area-inset-bottom) + 10px));
-      left: 50%;
-      width: min(calc(100vw - 32px), 640px);
-      padding: 10px 13px;
-      border: 1px solid rgba(105, 232, 255, 0.28);
-      border-radius: 12px;
-      background: rgba(1, 11, 30, 0.84);
-      color: #e8ffff;
-      font-size: 12px;
-      font-weight: bold;
-      line-height: 1.35;
-      text-align: center;
-      transform: translateX(-50%);
-      backdrop-filter: blur(10px);
-    }
-
-    .screen {
-      position: fixed;
-      z-index: 10;
-      inset: 0;
-      display: grid;
-      place-items: center;
-      padding: 18px;
-      background: rgba(0, 5, 18, 0.45);
-      backdrop-filter: blur(4px);
-    }
-
-    .panel {
-      width: min(100%, 410px);
-      padding: 24px;
-      border: 1px solid rgba(106, 232, 255, 0.3);
-      border-radius: 20px;
-      background:
-        linear-gradient(
-          145deg,
-          rgba(16, 52, 96, 0.96),
-          rgba(2, 9, 28, 0.97)
-        );
-      box-shadow: 0 24px 75px rgba(0, 0, 0, 0.7);
-      text-align: center;
-    }
-
-    .eyebrow {
-      margin: 0 0 8px;
-      color: #7deeff;
-      font-size: 10px;
-      font-weight: 900;
-      letter-spacing: 0.14em;
-    }
-
-    h1,
-    h2 {
-      margin: 0;
-      color: #f3ffff;
-      letter-spacing: -0.05em;
-    }
-
-    h1 {
-      font-size: clamp(36px, 11vw, 50px);
-    }
-
-    h2 {
-      font-size: 28px;
-    }
-
-    .panel-copy {
-      margin: 13px 0 19px;
-      color: #bdd4e9;
-      font-size: 14px;
-      line-height: 1.48;
-    }
-
-    .instructions {
-      display: grid;
-      gap: 8px;
-      margin: 17px 0 20px;
-      text-align: left;
-    }
-
-    .instructions div {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      color: #d2e1f0;
-      font-size: 13px;
-    }
-
-    .instructions b {
-      display: grid;
-      width: 24px;
-      height: 24px;
-      place-items: center;
-      border-radius: 50%;
-      background: linear-gradient(135deg, #4feedd, #5da9ff);
-      color: #031321;
-      font-size: 10px;
-    }
-
-    button {
-      width: 100%;
-      padding: 14px 16px;
-      border: 0;
-      border-radius: 12px;
-      background: linear-gradient(135deg, #4ef0dd, #5da9ff);
-      color: #031320;
-      cursor: pointer;
-      font: inherit;
-      font-size: 15px;
-      font-weight: 900;
-      box-shadow: 0 9px 28px rgba(64, 213, 255, 0.28);
-    }
-
-    button:disabled {
-      cursor: wait;
-      opacity: 0.65;
-    }
-
-    #calibration-screen {
-      align-items: end;
-      padding-bottom: 86px;
-    }
-
-    #calibration-bar {
-      height: 10px;
-      margin-top: 18px;
-      overflow: hidden;
-      border: 1px solid rgba(103, 232, 255, 0.28);
-      border-radius: 999px;
-      background: rgba(100, 231, 255, 0.13);
-    }
-
-    #calibration-fill {
-      width: 0%;
-      height: 100%;
-      border-radius: inherit;
-      background: linear-gradient(90deg, #58caff, #62ffd1);
-      box-shadow: 0 0 13px #5deaff;
-    }
-
-    #calibration-percent {
-      display: block;
-      margin-top: 8px;
-      color: #edffff;
+      padding: 10px;
+      background: rgba(0, 0, 0, 0.65);
+      color: white;
       font-size: 16px;
     }
 
-    #result-grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 8px;
-      margin: 18px 0;
-    }
-
-    #result-grid article {
-      padding: 11px 7px;
-      border: 1px solid rgba(102, 232, 255, 0.16);
+    #start {
+      position: fixed;
+      z-index: 10;
+      top: 50%;
+      left: 50%;
+      padding: 16px 24px;
+      border: 0;
       border-radius: 10px;
-      background: rgba(3, 16, 43, 0.67);
+      background: #55e6ff;
+      color: #001019;
+      cursor: pointer;
+      font-size: 18px;
+      font-weight: bold;
+      transform: translate(-50%, -50%);
     }
 
-    #result-grid span {
-      display: block;
-      color: #87efff;
-      font-size: 8px;
-      font-weight: 900;
-      letter-spacing: 0.1em;
-    }
-
-    #result-grid strong {
-      display: block;
-      margin-top: 4px;
-      color: #eaffff;
-      font-size: 19px;
+    #start:disabled {
+      opacity: 0.65;
     }
 
     .hidden {
-      display: none !important;
-    }
-
-    @media (max-width: 430px) {
-      .screen {
-        padding: 14px;
-      }
-
-      .panel {
-        padding: 21px;
-      }
-
-      #stats .hud-card strong {
-        font-size: 12px;
-      }
+      display: none;
     }
   </style>
 </head>
@@ -378,142 +80,9 @@
   <video id="video" autoplay muted playsinline></video>
   <canvas id="canvas"></canvas>
 
-  <div class="scanlines"></div>
-  <div class="vignette"></div>
+  <div id="info">Score: 0 | Health: 3 | Loading...</div>
 
-  <section id="hud">
-    <div class="hud-top">
-      <article class="hud-card">
-        <span class="label">SCOUTER SYSTEM</span>
-        <strong>STORM RUNNER</strong>
-      </article>
-
-      <article id="aura-card" class="hud-card">
-        <span class="label">AURA STABILITY</span>
-
-        <div id="aura-meter">
-          <div id="aura-fill"></div>
-        </div>
-
-        <strong id="aura-value">100%</strong>
-      </article>
-    </div>
-
-    <div id="stats">
-      <article class="hud-card">
-        <span class="label">TIME</span>
-        <strong id="time-value">0.0s</strong>
-      </article>
-
-      <article class="hud-card">
-        <span class="label">DODGE</span>
-        <strong id="dodge-value">0</strong>
-      </article>
-
-      <article class="hud-card">
-        <span class="label">COMBO</span>
-        <strong id="combo-value">x0</strong>
-      </article>
-
-      <article class="hud-card">
-        <span class="label">SPD</span>
-        <strong id="speed-value">--</strong>
-      </article>
-    </div>
-
-    <article id="movement-card" class="hud-card">
-      <div>
-        <span class="label">MOVE</span>
-        <strong id="movement-value">NEUTRAL</strong>
-      </div>
-
-      <div>
-        <span class="label">TRACK</span>
-        <strong id="track-value">--%</strong>
-      </div>
-    </article>
-  </section>
-
-  <div id="status">Click Start Camera to begin.</div>
-
-  <section id="menu-screen" class="screen">
-    <div class="panel">
-      <p class="eyebrow">PHONE CAMERA DODGE GAME</p>
-      <h1>Storm Runner</h1>
-
-      <p class="panel-copy">
-        Incoming wind blades lock onto your current head position.
-        Slip, duck, or lean before they reach the target.
-      </p>
-
-      <div class="instructions">
-        <div>
-          <b>01</b>
-          <span>Allow camera access.</span>
-        </div>
-
-        <div>
-          <b>02</b>
-          <span>Keep your full head and both shoulders visible.</span>
-        </div>
-
-        <div>
-          <b>03</b>
-          <span>Hold still for neutral stance calibration.</span>
-        </div>
-      </div>
-
-      <button id="start-button">Start Camera</button>
-    </div>
-  </section>
-
-  <section id="calibration-screen" class="screen hidden">
-    <div class="panel">
-      <p class="eyebrow">CALIBRATION</p>
-      <h2 id="calibration-title">Hold Neutral Stance</h2>
-
-      <p id="calibration-copy" class="panel-copy">
-        Face the camera. Keep your head and both shoulders visible.
-      </p>
-
-      <div id="calibration-bar">
-        <div id="calibration-fill"></div>
-      </div>
-
-      <strong id="calibration-percent">0%</strong>
-    </div>
-  </section>
-
-  <section id="result-screen" class="screen hidden">
-    <div class="panel">
-      <p class="eyebrow">STORM REPORT</p>
-      <h2>Run Complete</h2>
-
-      <div id="result-grid">
-        <article>
-          <span>SURVIVAL</span>
-          <strong id="result-time">0.0s</strong>
-        </article>
-
-        <article>
-          <span>DODGES</span>
-          <strong id="result-dodges">0</strong>
-        </article>
-
-        <article>
-          <span>BEST COMBO</span>
-          <strong id="result-combo">x0</strong>
-        </article>
-
-        <article>
-          <span>SPD</span>
-          <strong id="result-speed">--</strong>
-        </article>
-      </div>
-
-      <button id="restart-button">Run Again</button>
-    </div>
-  </section>
+  <button id="start">Start Camera</button>
 
   <script type="module">
     import {
@@ -521,126 +90,28 @@
       PoseLandmarker
     } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/+esm";
 
-    /*
-      MEDIA PIPE POSE LANDMARK INDICES:
-      0  = nose
-      11 = left shoulder
-      12 = right shoulder
-    */
-
     const video = document.getElementById("video");
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
+    const info = document.getElementById("info");
+    const startButton = document.getElementById("start");
 
-    const menuScreen = document.getElementById("menu-screen");
-    const calibrationScreen = document.getElementById(
-      "calibration-screen"
-    );
-    const resultScreen = document.getElementById("result-screen");
-
-    const startButton = document.getElementById("start-button");
-    const restartButton = document.getElementById("restart-button");
-
-    const status = document.getElementById("status");
-    const hud = document.getElementById("hud");
-
-    const auraFill = document.getElementById("aura-fill");
-    const auraValue = document.getElementById("aura-value");
-    const timeValue = document.getElementById("time-value");
-    const dodgeValue = document.getElementById("dodge-value");
-    const comboValue = document.getElementById("combo-value");
-    const speedValue = document.getElementById("speed-value");
-    const movementValue = document.getElementById("movement-value");
-    const trackValue = document.getElementById("track-value");
-
-    const calibrationTitle = document.getElementById(
-      "calibration-title"
-    );
-    const calibrationCopy = document.getElementById(
-      "calibration-copy"
-    );
-    const calibrationFill = document.getElementById(
-      "calibration-fill"
-    );
-    const calibrationPercent = document.getElementById(
-      "calibration-percent"
-    );
-
-    const resultTime = document.getElementById("result-time");
-    const resultDodges = document.getElementById("result-dodges");
-    const resultCombo = document.getElementById("result-combo");
-    const resultSpeed = document.getElementById("result-speed");
-
-    const STATE = {
-      MENU: "MENU",
-      CALIBRATION: "CALIBRATION",
-      PLAYING: "PLAYING",
-      RESULTS: "RESULTS"
-    };
-
-    const CONFIG = {
-      calibrationTime: 2500,
-      minCalibrationSamples: 25,
-      minConfidence: 0.42,
-
-      slipThreshold: 0.17,
-      duckThreshold: 0.18,
-      leanThreshold: 12,
-
-      hitDamage: 25,
-      projectileRadius: 14,
-      projectileMargin: 120,
-
-      minimumHitboxX: 30,
-      minimumHitboxY: 38,
-      hitboxXRatio: 0.28,
-      hitboxYRatio: 0.35
-    };
-
-    let state = STATE.MENU;
     let poseLandmarker = null;
-    let cameraStarted = false;
-    let animationStarted = false;
     let lastVideoTime = -1;
-    let lastFrame = 0;
+    let running = false;
+    let score = 0;
+    let health = 3;
+    let lastSpawn = 0;
 
-    let pose = null;
-    let neutral = null;
-    let calibration = null;
-    let game = null;
+    const player = {
+      x: window.innerWidth / 2,
+      y: window.innerHeight / 2,
+      radius: 38
+    };
 
-    function setStatus(text) {
-      status.textContent = text;
-      console.log("[Storm Runner]", text);
-    }
+    let projectile = null;
 
-    function clamp(value, min, max) {
-      return Math.min(Math.max(value, min), max);
-    }
-
-    function lerp(a, b, t) {
-      return a + (b - a) * t;
-    }
-
-    function average(list) {
-      if (!list.length) return 0;
-
-      return list.reduce((sum, value) => sum + value, 0) /
-        list.length;
-    }
-
-    function median(values) {
-      if (!values.length) return null;
-
-      const sorted = [...values].sort((a, b) => a - b);
-      const middle = Math.floor(sorted.length / 2);
-
-      return sorted.length % 2
-        ? sorted[middle]
-        : (sorted[middle - 1] + sorted[middle]) / 2;
-    }
-
-    function resizeCanvas() {
+    function resize() {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
 
       canvas.width = Math.floor(window.innerWidth * dpr);
@@ -652,53 +123,17 @@
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
 
-    function hideScreens() {
-      menuScreen.classList.add("hidden");
-      calibrationScreen.classList.add("hidden");
-      resultScreen.classList.add("hidden");
-    }
-
-    function showScreen(screen) {
-      hideScreens();
-
-      if (screen) {
-        screen.classList.remove("hidden");
-      }
-    }
-
-    function createGame() {
-      return {
-        aura: 100,
-        dodges: 0,
-        combo: 0,
-        bestCombo: 0,
-        startedAt: performance.now(),
-        lastSpawnAt: performance.now(),
-        projectiles: [],
-        reactionTimes: [],
-        reactionWatch: null
-      };
-    }
-
-    async function setupCamera() {
-      /*
-        Keep this intentionally simple.
-        This is the part that invokes the browser permission popup.
-      */
+    async function startCamera() {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: true,
         audio: false
       });
 
       video.srcObject = stream;
-
       await video.play();
-
-      cameraStarted = true;
-      setStatus("Camera ready. Loading pose tracker…");
     }
 
-    async function setupPose() {
+    async function startPoseTracking() {
       const vision = await FilesetResolver.forVisionTasks(
         "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm"
       );
@@ -712,30 +147,21 @@
               "pose_landmarker_lite.task",
             delegate: "CPU"
           },
-
           runningMode: "VIDEO",
-          numPoses: 1,
-
-          minPoseDetectionConfidence: 0.5,
-          minPosePresenceConfidence: 0.5,
-          minTrackingConfidence: 0.5
+          numPoses: 1
         });
-
-      setStatus(
-        "Tracker active. Hold neutral stance for calibration."
-      );
     }
 
-    function getPose(timestamp) {
+    function updatePlayer(timestamp) {
       if (
         !poseLandmarker ||
         video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
       ) {
-        return null;
+        return;
       }
 
       if (video.currentTime === lastVideoTime) {
-        return pose;
+        return;
       }
 
       lastVideoTime = video.currentTime;
@@ -746,635 +172,151 @@
       );
 
       if (!result.landmarks?.length) {
-        pose = null;
-        return null;
-      }
-
-      const landmarks = result.landmarks[0];
-
-      const nose = landmarks[0];
-      const leftShoulder = landmarks[11];
-      const rightShoulder = landmarks[12];
-
-      if (!nose || !leftShoulder || !rightShoulder) {
-        pose = null;
-        return null;
-      }
-
-      const confidence =
-        ((nose.visibility ?? 1) +
-          (leftShoulder.visibility ?? 1) +
-          (rightShoulder.visibility ?? 1)) / 3;
-
-      if (confidence < CONFIG.minConfidence) {
-        pose = null;
-        return null;
-      }
-
-      const shoulderMid = {
-        x: (leftShoulder.x + rightShoulder.x) / 2,
-        y: (leftShoulder.y + rightShoulder.y) / 2
-      };
-
-      const shoulderWidth = Math.hypot(
-        rightShoulder.x - leftShoulder.x,
-        rightShoulder.y - leftShoulder.y
-      );
-
-      const shoulderAngle =
-        Math.atan2(
-          rightShoulder.y - leftShoulder.y,
-          rightShoulder.x - leftShoulder.x
-        ) *
-        (180 / Math.PI);
-
-      const raw = {
-        nose,
-        shoulders: shoulderMid,
-        shoulderWidth,
-        shoulderAngle,
-        confidence
-      };
-
-      if (!pose) {
-        pose = raw;
-        return pose;
-      }
-
-      pose = {
-        ...raw,
-        nose: {
-          ...raw.nose,
-          x: lerp(pose.nose.x, raw.nose.x, 0.35),
-          y: lerp(pose.nose.y, raw.nose.y, 0.35)
-        },
-        shoulders: {
-          x: lerp(
-            pose.shoulders.x,
-            raw.shoulders.x,
-            0.35
-          ),
-          y: lerp(
-            pose.shoulders.y,
-            raw.shoulders.y,
-            0.35
-          )
-        },
-        shoulderWidth: lerp(
-          pose.shoulderWidth,
-          raw.shoulderWidth,
-          0.35
-        ),
-        shoulderAngle: lerp(
-          pose.shoulderAngle,
-          raw.shoulderAngle,
-          0.35
-        )
-      };
-
-      return pose;
-    }
-
-    function startCalibration(timestamp) {
-      state = STATE.CALIBRATION;
-      neutral = null;
-
-      calibration = {
-        startedAt: timestamp,
-        samples: []
-      };
-
-      hud.style.display = "none";
-      showScreen(calibrationScreen);
-
-      calibrationTitle.textContent = "Hold Neutral Stance";
-      calibrationCopy.textContent =
-        "Face the camera. Keep your head and both shoulders visible.";
-
-      calibrationFill.style.width = "0%";
-      calibrationPercent.textContent = "0%";
-    }
-
-    function collectCalibration(currentPose, timestamp) {
-      if (!currentPose || !calibration) {
-        calibrationTitle.textContent = "Tracking Lost";
-        calibrationCopy.textContent =
-          "Step back and keep your head plus both shoulders in view.";
         return;
       }
 
-      calibration.samples.push({
-        noseX: currentPose.nose.x,
-        noseY: currentPose.nose.y,
-        shoulderX: currentPose.shoulders.x,
-        shoulderY: currentPose.shoulders.y,
-        shoulderWidth: currentPose.shoulderWidth,
-        shoulderAngle: currentPose.shoulderAngle
-      });
+      const nose = result.landmarks[0][0];
 
-      const progress = clamp(
-        (timestamp - calibration.startedAt) /
-          CONFIG.calibrationTime,
-        0,
-        1
-      );
-
-      calibrationFill.style.width = `${progress * 100}%`;
-      calibrationPercent.textContent =
-        `${Math.round(progress * 100)}%`;
-
-      if (
-        progress < 1 ||
-        calibration.samples.length <
-          CONFIG.minCalibrationSamples
-      ) {
+      if (!nose) {
         return;
       }
 
-      neutral = {
-        nose: {
-          x: average(
-            calibration.samples.map((sample) => sample.noseX)
-          ),
-          y: average(
-            calibration.samples.map((sample) => sample.noseY)
-          )
-        },
-
-        shoulders: {
-          x: average(
-            calibration.samples.map((sample) => sample.shoulderX)
-          ),
-          y: average(
-            calibration.samples.map((sample) => sample.shoulderY)
-          )
-        },
-
-        shoulderWidth: average(
-          calibration.samples.map(
-            (sample) => sample.shoulderWidth
-          )
-        ),
-
-        shoulderAngle: average(
-          calibration.samples.map(
-            (sample) => sample.shoulderAngle
-          )
-        )
-      };
-
-      startGame(timestamp);
+      player.x = (1 - nose.x) * window.innerWidth;
+      player.y = nose.y * window.innerHeight;
     }
 
-    function startGame(timestamp) {
-      state = STATE.PLAYING;
-      game = createGame();
-      game.startedAt = timestamp;
-      game.lastSpawnAt = timestamp;
+    function spawnProjectile() {
+      const fromLeft = Math.random() > 0.5;
 
-      hud.style.display = "grid";
-      showScreen(null);
+      const startX = fromLeft ? -40 : window.innerWidth + 40;
+      const startY =
+        80 + Math.random() * (window.innerHeight - 160);
 
-      setStatus(
-        "Storm field active. Read the line, then dodge."
-      );
-    }
+      /*
+        Lock the projectile to the player's current position.
+        The player can dodge after this target is chosen.
+      */
+      const targetX = player.x;
+      const targetY = player.y;
 
-    function getMovement(currentPose) {
-      if (!currentPose || !neutral) {
-        return {
-          label: "NO TRACK",
-          slipX: 0,
-          duckY: 0
-        };
-      }
+      const dx = targetX - startX;
+      const dy = targetY - startY;
+      const distance = Math.hypot(dx, dy) || 1;
+      const speed = 520;
 
-      const width = Math.max(neutral.shoulderWidth, 0.001);
-
-      const slipX =
-        (currentPose.nose.x - neutral.nose.x) / width;
-
-      const duckY =
-        ((currentPose.nose.y - neutral.nose.y) +
-          (currentPose.shoulders.y -
-            neutral.shoulders.y)) /
-        2 /
-        width;
-
-      const torsoShift =
-        (currentPose.shoulders.x -
-          neutral.shoulders.x) /
-        width;
-
-      let angle =
-        currentPose.shoulderAngle - neutral.shoulderAngle;
-
-      while (angle > 180) angle -= 360;
-      while (angle < -180) angle += 360;
-
-      let label = "NEUTRAL";
-
-      if (duckY > CONFIG.duckThreshold) {
-        label = "DUCK";
-      } else if (slipX < -CONFIG.slipThreshold) {
-        label = "SLIP LEFT";
-      } else if (slipX > CONFIG.slipThreshold) {
-        label = "SLIP RIGHT";
-      } else if (
-        angle < -CONFIG.leanThreshold &&
-        torsoShift < -0.05
-      ) {
-        label = "LEAN LEFT";
-      } else if (
-        angle > CONFIG.leanThreshold &&
-        torsoShift > 0.05
-      ) {
-        label = "LEAN RIGHT";
-      }
-
-      return {
-        label,
-        slipX,
-        duckY,
-        leanAngle: angle
+      projectile = {
+        x: startX,
+        y: startY,
+        vx: (dx / distance) * speed,
+        vy: (dy / distance) * speed,
+        targetX,
+        targetY,
+        radius: 15,
+        createdAt: performance.now(),
+        warningTime: 600,
+        fired: false
       };
     }
 
-    function makePlayer(currentPose, movement) {
-      if (!currentPose) return null;
+    function hitTest() {
+      if (!projectile) return false;
 
-      const shoulderPixels =
-        currentPose.shoulderWidth * window.innerWidth;
+      const dx = projectile.x - player.x;
+      const dy = projectile.y - player.y;
+      const distance = Math.hypot(dx, dy);
 
-      return {
-        x: (1 - currentPose.nose.x) * window.innerWidth,
-        y: currentPose.nose.y * window.innerHeight,
-
-        radiusX: Math.max(
-          CONFIG.minimumHitboxX,
-          shoulderPixels * CONFIG.hitboxXRatio
-        ),
-
-        radiusY: Math.max(
-          CONFIG.minimumHitboxY,
-          shoulderPixels * CONFIG.hitboxYRatio
-        ),
-
-        confidence: currentPose.confidence,
-        movement
-      };
+      return distance < projectile.radius + player.radius;
     }
 
-    function spawnProjectile(player, timestamp) {
-      const side = Math.random() > 0.5 ? "left" : "right";
-      const margin = 70;
-
-      const start = {
-        x: side === "left" ? -margin : window.innerWidth + margin,
-        y:
-          window.innerHeight *
-          (0.18 + Math.random() * 0.6)
-      };
-
-      const target = {
-        x: player.x,
-        y:
-          player.y +
-          (Math.random() - 0.5) *
-            player.radiusY
-      };
-
-      const dx = target.x - start.x;
-      const dy = target.y - start.y;
-      const length = Math.hypot(dx, dy) || 1;
-
-      const elapsed =
-        (timestamp - game.startedAt) / 1000;
-
-      const difficulty = clamp(1 + elapsed / 45, 1, 2.1);
-      const travelSeconds = Math.max(
-        0.55,
-        1.35 - difficulty * 0.22
-      );
-
-      game.projectiles.push({
-        x: start.x,
-        y: start.y,
-
-        vx: (dx / length) * (length / travelSeconds),
-        vy: (dy / length) * (length / travelSeconds),
-
-        targetX: target.x,
-        targetY: target.y,
-
-        radius: CONFIG.projectileRadius,
-        createdAt: timestamp,
-        telegraphMs: Math.max(
-          300,
-          780 - difficulty * 110
-        ),
-
-        firedAt: null,
-        closestDistance: Infinity,
-        active: true
-      });
-
-      setStatus("LOCK ON — prepare to move.");
-    }
-
-    function circleHitsEllipse(circle, ellipse) {
-      const radiusX = ellipse.radiusX + circle.radius;
-      const radiusY = ellipse.radiusY + circle.radius;
-
-      const dx = circle.x - ellipse.x;
-      const dy = circle.y - ellipse.y;
+    function projectileOut() {
+      const padding = 100;
 
       return (
-        (dx * dx) / (radiusX * radiusX) +
-          (dy * dy) / (radiusY * radiusY) <=
-        1
+        projectile.x < -padding ||
+        projectile.x > window.innerWidth + padding ||
+        projectile.y < -padding ||
+        projectile.y > window.innerHeight + padding
       );
     }
 
-    function normalizedDistance(point, ellipse) {
-      const dx = point.x - ellipse.x;
-      const dy = point.y - ellipse.y;
-
-      return Math.sqrt(
-        (dx * dx) /
-          (ellipse.radiusX * ellipse.radiusX) +
-          (dy * dy) /
-            (ellipse.radiusY * ellipse.radiusY)
-      );
-    }
-
-    function outOfBounds(projectile) {
-      const margin = CONFIG.projectileMargin;
-
-      return (
-        projectile.x < -margin ||
-        projectile.x > window.innerWidth + margin ||
-        projectile.y < -margin ||
-        projectile.y > window.innerHeight + margin
-      );
-    }
-
-    function startReactionWatch(player, timestamp) {
-      game.reactionWatch = {
-        startedAt: timestamp,
-        x: player.movement.slipX,
-        y: player.movement.duckY,
-        found: false
-      };
-    }
-
-    function updateReaction(player, timestamp) {
-      if (!game?.reactionWatch || game.reactionWatch.found) {
-        return;
-      }
-
-      const watch = game.reactionWatch;
-      const elapsed = timestamp - watch.startedAt;
-
-      if (elapsed > 1500) {
-        watch.found = true;
-        return;
-      }
-
-      const movementAmount = Math.hypot(
-        player.movement.slipX - watch.x,
-        player.movement.duckY - watch.y
-      );
-
-      if (movementAmount > 0.045) {
-        watch.found = true;
-
-        if (elapsed >= 80 && elapsed <= 1500) {
-          game.reactionTimes.push(elapsed);
+    function updateProjectile(timestamp, deltaMs) {
+      if (!projectile) {
+        if (timestamp - lastSpawn > 1200) {
+          spawnProjectile();
+          lastSpawn = timestamp;
         }
-      }
-    }
 
-    function resolveHit(projectile) {
-      projectile.active = false;
-
-      game.aura = Math.max(
-        0,
-        game.aura - CONFIG.hitDamage
-      );
-
-      game.combo = 0;
-      game.reactionWatch = null;
-
-      if (game.aura <= 0) {
-        setStatus("Aura collapsed.");
-        endGame();
-      } else {
-        setStatus(`HIT — Aura ${game.aura}%`);
-      }
-    }
-
-    function resolveDodge(projectile) {
-      projectile.active = false;
-
-      game.dodges += 1;
-      game.combo += 1;
-      game.bestCombo = Math.max(
-        game.bestCombo,
-        game.combo
-      );
-
-      let text = "DODGE";
-
-      if (projectile.closestDistance >= 1.55) {
-        text = "CLEAN DODGE";
-      } else if (projectile.closestDistance >= 1.25) {
-        text = "NEAR MISS";
+        return;
       }
 
-      setStatus(`${text} — Combo x${game.combo}`);
-    }
+      if (!projectile.fired) {
+        if (
+          timestamp - projectile.createdAt >=
+          projectile.warningTime
+        ) {
+          projectile.fired = true;
+        }
 
-    function updateProjectiles(player, deltaMs, timestamp) {
+        return;
+      }
+
       const dt = deltaMs / 1000;
 
-      for (const projectile of game.projectiles) {
-        if (!projectile.active) continue;
+      projectile.x += projectile.vx * dt;
+      projectile.y += projectile.vy * dt;
 
-        if (!projectile.firedAt) {
-          if (
-            timestamp - projectile.createdAt >=
-            projectile.telegraphMs
-          ) {
-            projectile.firedAt = timestamp;
-            startReactionWatch(player, timestamp);
-            setStatus("FIRE!");
-          }
+      if (hitTest()) {
+        health -= 1;
+        projectile = null;
 
-          continue;
-        }
+        if (health <= 0) {
+          running = false;
+          info.textContent =
+            `Game Over | Score: ${score} | Click Start Camera to restart`;
 
-        projectile.x += projectile.vx * dt;
-        projectile.y += projectile.vy * dt;
-
-        const proximity = normalizedDistance(
-          projectile,
-          player
-        );
-
-        projectile.closestDistance = Math.min(
-          projectile.closestDistance,
-          proximity
-        );
-
-        if (circleHitsEllipse(projectile, player)) {
-          resolveHit(projectile);
-          continue;
-        }
-
-        if (outOfBounds(projectile)) {
-          resolveDodge(projectile);
+          startButton.textContent = "Restart";
+          startButton.classList.remove("hidden");
         }
       }
 
-      game.projectiles = game.projectiles.filter(
-        (projectile) => projectile.active
-      );
-    }
-
-    function updateGame(player, deltaMs, timestamp) {
-      if (!game || !player) return;
-
-      const elapsed =
-        (timestamp - game.startedAt) / 1000;
-
-      const difficulty = clamp(1 + elapsed / 45, 1, 2.1);
-
-      const spawnDelay = Math.max(
-        650,
-        1550 - difficulty * 260
-      );
-
-      if (
-        game.projectiles.length === 0 &&
-        timestamp - game.lastSpawnAt > spawnDelay
-      ) {
-        spawnProjectile(player, timestamp);
-        game.lastSpawnAt = timestamp;
+      if (projectile && projectileOut()) {
+        score += 1;
+        projectile = null;
       }
-
-      updateReaction(player, timestamp);
-      updateProjectiles(player, deltaMs, timestamp);
     }
 
-    function updateHud(player) {
-      if (!game) return;
-
-      const elapsed =
-        (performance.now() - game.startedAt) / 1000;
-
-      const reaction = median(game.reactionTimes);
-
-      auraFill.style.width = `${game.aura}%`;
-      auraValue.textContent = `${game.aura}%`;
-      timeValue.textContent = `${elapsed.toFixed(1)}s`;
-      dodgeValue.textContent = game.dodges;
-      comboValue.textContent = `x${game.combo}`;
-      speedValue.textContent = reaction
-        ? `${Math.round(reaction)}ms`
-        : "--";
-
-      movementValue.textContent =
-        player?.movement.label ?? "NO TRACK";
-
-      trackValue.textContent = player
-        ? `${Math.round(player.confidence * 100)}%`
-        : "0%";
-    }
-
-    function drawStorm(timestamp) {
-      ctx.save();
-      ctx.strokeStyle = "rgba(95, 232, 255, 0.08)";
-      ctx.lineWidth = 1;
-
-      for (
-        let y = 90;
-        y < window.innerHeight;
-        y += 46
-      ) {
-        ctx.beginPath();
-
-        for (
-          let x = 0;
-          x <= window.innerWidth;
-          x += 28
-        ) {
-          const wave =
-            Math.sin(
-              x * 0.018 +
-                timestamp / 700 +
-                y * 0.01
-            ) * 7;
-
-          if (x === 0) {
-            ctx.moveTo(x, y + wave);
-          } else {
-            ctx.lineTo(x, y + wave);
-          }
-        }
-
-        ctx.stroke();
-      }
-
-      ctx.restore();
-    }
-
-    function drawPlayer(player) {
-      if (!player) return;
-
-      ctx.save();
-
-      ctx.fillStyle = "rgba(91, 255, 191, 0.12)";
-      ctx.strokeStyle = "rgba(91, 255, 191, 0.95)";
-      ctx.lineWidth = 2;
+    function drawPlayer() {
+      ctx.strokeStyle = "#4dffbf";
+      ctx.lineWidth = 3;
 
       ctx.beginPath();
-      ctx.ellipse(
+      ctx.arc(
         player.x,
         player.y,
-        player.radiusX,
-        player.radiusY,
-        0,
+        player.radius,
         0,
         Math.PI * 2
       );
-
-      ctx.fill();
       ctx.stroke();
 
-      ctx.fillStyle = "#dbfff2";
-      ctx.font = "bold 12px Arial";
-      ctx.textAlign = "center";
+      ctx.fillStyle = "#baffea";
 
-      ctx.fillText(
-        player.movement.label,
+      ctx.beginPath();
+      ctx.arc(
         player.x,
-        player.y - player.radiusY - 14
+        player.y,
+        8,
+        0,
+        Math.PI * 2
       );
-
-      ctx.restore();
+      ctx.fill();
     }
 
-    function drawProjectile(projectile, timestamp) {
+    function drawProjectile(timestamp) {
       if (!projectile) return;
 
-      ctx.save();
-
-      if (!projectile.firedAt) {
-        ctx.globalAlpha =
-          0.4 + Math.sin(timestamp / 110) * 0.2;
-
-        ctx.strokeStyle = "#fff0a5";
+      if (!projectile.fired) {
+        ctx.strokeStyle = "#ffe66d";
         ctx.lineWidth = 2;
         ctx.setLineDash([7, 7]);
 
@@ -1392,88 +334,42 @@
         ctx.arc(
           projectile.targetX,
           projectile.targetY,
-          22,
+          24,
           0,
           Math.PI * 2
         );
-
         ctx.stroke();
-        ctx.restore();
+
         return;
       }
 
-      const direction = Math.atan2(
-        projectile.vy,
-        projectile.vx
-      );
-
-      const tailLength = 70;
-      const tailX =
-        projectile.x - Math.cos(direction) * tailLength;
-
-      const tailY =
-        projectile.y - Math.sin(direction) * tailLength;
-
-      const trail = ctx.createLinearGradient(
-        tailX,
-        tailY,
-        projectile.x,
-        projectile.y
-      );
-
-      trail.addColorStop(
-        0,
-        "rgba(57, 222, 255, 0)"
-      );
-
-      trail.addColorStop(
-        1,
-        "rgba(82, 240, 255, 0.98)"
-      );
-
-      ctx.strokeStyle = trail;
-      ctx.lineWidth = projectile.radius * 1.2;
-      ctx.lineCap = "round";
-
-      ctx.beginPath();
-      ctx.moveTo(tailX, tailY);
-      ctx.lineTo(projectile.x, projectile.y);
-      ctx.stroke();
-
-      const glow = ctx.createRadialGradient(
-        projectile.x,
-        projectile.y,
-        1,
-        projectile.x,
-        projectile.y,
-        projectile.radius * 2.7
-      );
-
-      glow.addColorStop(0, "#ffffff");
-      glow.addColorStop(0.3, "#caffff");
-      glow.addColorStop(0.62, "#46e6ff");
-      glow.addColorStop(
-        1,
-        "rgba(41, 175, 255, 0)"
-      );
-
-      ctx.fillStyle = glow;
+      ctx.fillStyle = "#52e8ff";
 
       ctx.beginPath();
       ctx.arc(
         projectile.x,
         projectile.y,
-        projectile.radius * 2.7,
+        projectile.radius,
         0,
         Math.PI * 2
       );
-
       ctx.fill();
 
-      ctx.restore();
+      ctx.strokeStyle = "#d9ffff";
+      ctx.lineWidth = 2;
+
+      ctx.beginPath();
+      ctx.arc(
+        projectile.x,
+        projectile.y,
+        projectile.radius + 4,
+        0,
+        Math.PI * 2
+      );
+      ctx.stroke();
     }
 
-    function draw(player, timestamp) {
+    function draw(timestamp) {
       ctx.clearRect(
         0,
         0,
@@ -1481,127 +377,74 @@
         window.innerHeight
       );
 
-      drawStorm(timestamp);
-
-      if (game) {
-        for (const projectile of game.projectiles) {
-          drawProjectile(projectile, timestamp);
-        }
-      }
-
-      drawPlayer(player);
-    }
-
-    function endGame() {
-      if (state !== STATE.PLAYING) return;
-
-      state = STATE.RESULTS;
-      hud.style.display = "none";
-
-      const survival =
-        (performance.now() - game.startedAt) / 1000;
-
-      const reaction = median(game.reactionTimes);
-
-      resultTime.textContent = `${survival.toFixed(1)}s`;
-      resultDodges.textContent = game.dodges;
-      resultCombo.textContent = `x${game.bestCombo}`;
-      resultSpeed.textContent = reaction
-        ? `${Math.round(reaction)}ms`
-        : "--";
-
-      showScreen(resultScreen);
-    }
-
-    async function startApp() {
-      try {
-        startButton.disabled = true;
-        startButton.textContent = "Allow Camera…";
-
-        /*
-          Camera permission happens first and is intentionally simple.
-        */
-        await setupCamera();
-
-        /*
-          Everything complex begins only after camera permission succeeds.
-        */
-        await setupPose();
-
-        if (!animationStarted) {
-          animationStarted = true;
-          requestAnimationFrame(loop);
-        }
-
-        startCalibration(performance.now());
-      } catch (error) {
-        console.error(error);
-
-        const readableError =
-          error?.name === "NotAllowedError"
-            ? "Camera permission denied. Allow camera access and try again."
-            : error?.message || "Could not start the camera.";
-
-        setStatus(`ERROR: ${readableError}`);
-
-        startButton.disabled = false;
-        startButton.textContent = "Try Start Camera Again";
-      }
-    }
-
-    function restartApp() {
-      game = null;
-      neutral = null;
-      startCalibration(performance.now());
+      drawPlayer();
+      drawProjectile(timestamp);
     }
 
     function loop(timestamp) {
+      if (!running) return;
+
       const deltaMs = Math.min(
-        timestamp - lastFrame || 16,
+        timestamp - (loop.lastTime || timestamp),
         50
       );
 
-      lastFrame = timestamp;
+      loop.lastTime = timestamp;
 
-      const currentPose = getPose(timestamp);
-      const movement = getMovement(currentPose);
-      const player = makePlayer(currentPose, movement);
+      updatePlayer(timestamp);
+      updateProjectile(timestamp, deltaMs);
+      draw(timestamp);
 
-      if (state === STATE.CALIBRATION) {
-        collectCalibration(currentPose, timestamp);
-      }
-
-      if (state === STATE.PLAYING) {
-        if (!player) {
-          setStatus(
-            "Tracking lost. Keep your head and both shoulders visible."
-          );
-        } else {
-          updateGame(player, deltaMs, timestamp);
-        }
-
-        updateHud(player);
-      }
-
-      draw(player, timestamp);
+      info.textContent =
+        `Score: ${score} | Health: ${health} | Move your head to dodge`;
 
       requestAnimationFrame(loop);
     }
 
-    startButton.addEventListener("click", startApp);
-    restartButton.addEventListener("click", restartApp);
+    async function startGame() {
+      try {
+        startButton.disabled = true;
+        startButton.textContent = "Starting Camera...";
 
-    window.addEventListener("resize", resizeCanvas);
+        /*
+          First: native browser camera permission.
+          Nothing else needs to happen for the permission popup.
+        */
+        await startCamera();
 
-    window.addEventListener("beforeunload", () => {
-      const stream = video.srcObject;
+        /*
+          Second: load the pose tracker after camera starts.
+        */
+        await startPoseTracking();
 
-      if (stream) {
-        stream.getTracks().forEach((track) => track.stop());
+        score = 0;
+        health = 3;
+        projectile = null;
+        lastSpawn = performance.now();
+        running = true;
+
+        startButton.classList.add("hidden");
+
+        info.textContent =
+          "Game started. Move your head to dodge.";
+
+        requestAnimationFrame(loop);
+      } catch (error) {
+        console.error(error);
+
+        info.textContent =
+          `Error: ${error.name || ""} ${error.message || ""}`;
+
+        startButton.disabled = false;
+        startButton.textContent = "Try Again";
       }
-    });
+    }
 
-    resizeCanvas();
+    startButton.addEventListener("click", startGame);
+
+    window.addEventListener("resize", resize);
+
+    resize();
   </script>
 </body>
 </html>
