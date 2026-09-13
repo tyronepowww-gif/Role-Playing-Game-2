@@ -159,8 +159,8 @@
         <h1>Laser Dodge</h1>
 
         <p id="permission-message">
-          Allow camera access. The game begins only when a person is clearly
-          separated from the background.
+          Allow camera access. The game begins after one centered face and a
+          foreground body silhouette are confirmed.
         </p>
 
         <button id="camera-permission" type="button">
@@ -170,12 +170,15 @@
     </section>
   </main>
 
-  <!-- TensorFlow.js core and WebGL backend -->
+  <!-- TensorFlow.js runtime -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.22.0/dist/tf-core.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.22.0/dist/tf-backend-webgl.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter@4.22.0/dist/tf-converter.min.js"></script>
 
-  <!-- TensorFlow.js person/body segmentation package -->
+  <!-- TensorFlow.js face detector -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-detection@1.0.3/dist/face-detection.min.js"></script>
+
+  <!-- TensorFlow.js person/body segmentation -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/body-segmentation@1.0.2/dist/body-segmentation.min.js"></script>
 
   <script>
@@ -198,8 +201,8 @@
         document.getElementById("camera-permission");
 
       /*
-        This offscreen canvas stores a low-resolution green silhouette.
-        It is used for rendering and exact pixel collision checks.
+        Holds a low-resolution green player silhouette.
+        It is used for both drawing and laser collision.
       */
       const maskCanvas = document.createElement("canvas");
       const maskCtx = maskCanvas.getContext(
@@ -208,10 +211,16 @@
       );
 
       let mediaStream = null;
+
+      let faceDetector = null;
+      let faceDetectorLoading = false;
       let segmenter = null;
       let segmenterLoading = false;
 
+      let faceDetectionBusy = false;
       let segmentationBusy = false;
+
+      let lastFaceDetectionAt = 0;
       let lastSegmentationAt = 0;
 
       let running = false;
@@ -225,43 +234,52 @@
       let lastLaserEndedAt = 0;
 
       /*
-        Run TensorFlow segmentation below drawing framerate.
-        This keeps camera/game animation responsive.
+        Performance controls. Face checks run slightly faster than
+        silhouette checks because the face gate controls readiness.
       */
-      const segmentationIntervalMs = 75;
+      const faceCheckIntervalMs = 70;
+      const segmentationIntervalMs = 95;
 
       /*
-        Pixels whose alpha is at least this value count as person.
-        TensorFlow body-segmentation masks use alpha as confidence.
+        Face gating requirements.
+        In video-normalized coordinates:
+        - Center X must remain between 24% and 76%.
+        - Center Y must remain between 15% and 72%.
+        - Face width must be at least 9% of camera-frame width.
+        - Exactly one detected face is permitted.
+      */
+      const faceCenterMinX = 0.24;
+      const faceCenterMaxX = 0.76;
+      const faceCenterMinY = 0.15;
+      const faceCenterMaxY = 0.72;
+      const minFaceWidthRatio = 0.09;
+      const requiredStableFaceFrames = 12;
+
+      /*
+        Body segmentation requirements.
       */
       const personAlphaThreshold = 145;
-
-      /*
-        A person silhouette needs to cover this percentage of the input
-        before it is accepted as real gameplay tracking.
-      */
       const minBodyAreaRatio = 0.018;
-
-      /*
-        Require a stable person mask across several segmentation results
-        before enabling lasers.
-      */
-      const requiredStableFrames = 8;
-
-      /*
-        Briefly preserve the last mask so the game does not flicker
-        when a single segmentation result is weak or delayed.
-      */
+      const requiredStableBodyFrames = 6;
       const trackingGraceMs = 800;
 
-      let stableFrames = 0;
+      let stableFaceFrames = 0;
+      let stableBodyFrames = 0;
+
+      const faceState = {
+        valid: false,
+        centerX: 0.5,
+        centerY: 0.5,
+        widthRatio: 0,
+        lastSeenAt: 0
+      };
 
       const player = {
         tracked: false,
         lastTrackedAt: 0,
 
         /*
-          `pixels` is one byte per mask pixel:
+          One byte for every mask pixel:
           255 = person
           0 = background
         */
@@ -305,18 +323,33 @@
         maskCanvas.height = 1;
       }
 
+      function resetFaceState() {
+        faceState.valid = false;
+        faceState.centerX = 0.5;
+        faceState.centerY = 0.5;
+        faceState.widthRatio = 0;
+        faceState.lastSeenAt = 0;
+
+        stableFaceFrames = 0;
+      }
+
       function resetGame() {
         score = 0;
         health = 3;
-        laser = null;
 
+        laser = null;
         lastLaserEndedAt = performance.now();
+
+        lastFaceDetectionAt = 0;
         lastSegmentationAt = 0;
-        loop.lastTime = undefined;
+
+        stableFaceFrames = 0;
+        stableBodyFrames = 0;
 
         gameStarted = false;
         gameOver = false;
-        stableFrames = 0;
+
+        resetFaceState();
 
         player.lastTrackedAt = 0;
         clearPlayerMask();
@@ -334,21 +367,36 @@
           return;
         }
 
-        if (!segmenter) {
+        if (!faceDetector || !segmenter) {
           statusDisplay.textContent =
-            "Loading person detection…";
+            "Loading TensorFlow tracking…";
           return;
         }
 
-        if (!player.tracked) {
+        if (stableFaceFrames < requiredStableFaceFrames) {
           statusDisplay.textContent =
-            "Looking for a person — lasers inactive.";
+            `Center your face — ${stableFaceFrames}/${requiredStableFaceFrames}`;
+          return;
+        }
+
+        if (
+          stableBodyFrames <
+          requiredStableBodyFrames
+        ) {
+          statusDisplay.textContent =
+            `Confirming body silhouette — ${stableBodyFrames}/${requiredStableBodyFrames}`;
           return;
         }
 
         if (!gameStarted) {
           statusDisplay.textContent =
-            `Person found — stabilizing ${stableFrames}/${requiredStableFrames}`;
+            "Tracking confirmed — preparing lasers.";
+          return;
+        }
+
+        if (!player.tracked) {
+          statusDisplay.textContent =
+            "Person lost — lasers inactive.";
           return;
         }
 
@@ -420,8 +468,7 @@
             "Your browser should now display its camera permission dialog.";
 
           /*
-            Browser camera permission needs to be called directly from
-            this click event.
+            Keep getUserMedia directly inside the click event.
           */
           mediaStream = await navigator.mediaDevices.getUserMedia({
             video: true,
@@ -437,28 +484,36 @@
           permissionPanel.classList.add("hidden");
 
           statusDisplay.textContent =
-            "Camera active. Loading TensorFlow person detection…";
+            "Camera active. Loading face and body tracking…";
 
           running = true;
-
           requestAnimationFrame(loop);
 
-          loadTensorFlowSegmenter();
+          loadTensorFlowModels();
 
         } catch (error) {
           showCameraError(error);
         }
       }
 
-      async function loadTensorFlowSegmenter() {
-        if (segmenter || segmenterLoading) {
+      async function loadTensorFlowModels() {
+        if (
+          (faceDetector && segmenter) ||
+          faceDetectorLoading ||
+          segmenterLoading
+        ) {
           return;
         }
 
+        faceDetectorLoading = true;
         segmenterLoading = true;
 
         try {
-          if (!window.tf || !window.bodySegmentation) {
+          if (
+            !window.tf ||
+            !window.faceDetection ||
+            !window.bodySegmentation
+          ) {
             throw new Error(
               "TensorFlow.js libraries did not load. Check your internet connection and reload."
             );
@@ -467,40 +522,165 @@
           await tf.setBackend("webgl");
           await tf.ready();
 
-          const model =
+          const faceModel =
+            faceDetection.SupportedModels
+              .MediaPipeFaceDetector;
+
+          faceDetector =
+            await faceDetection.createDetector(
+              faceModel,
+              {
+                runtime: "tfjs",
+                maxFaces: 2,
+                modelType: "short"
+              }
+            );
+
+          const bodyModel =
             bodySegmentation.SupportedModels
               .MediaPipeSelfieSegmentation;
 
-          /*
-            runtime: "tfjs" means inference runs through TensorFlow.js.
-            "general" is better when more of the body may be visible.
-          */
-          segmenter = await bodySegmentation.createSegmenter(
-            model,
-            {
-              runtime: "tfjs",
-              modelType: "general"
-            }
-          );
+          segmenter =
+            await bodySegmentation.createSegmenter(
+              bodyModel,
+              {
+                runtime: "tfjs",
+                modelType: "general"
+              }
+            );
 
           updateHud();
 
         } catch (error) {
-          console.error("TensorFlow segmentation error:", error);
+          console.error("TensorFlow model error:", error);
 
           statusDisplay.textContent =
-            "Camera active, but TensorFlow person detection could not load.";
+            "Camera active, but TensorFlow tracking could not load.";
 
         } finally {
+          faceDetectorLoading = false;
           segmenterLoading = false;
         }
       }
 
+      function getFaceBox(face) {
+        /*
+          The current face-detection API uses a box property
+          shaped like { xMin, yMin, width, height }.
+        */
+        if (face?.box) {
+          return face.box;
+        }
+
+        /*
+          Defensive fallback for API variants.
+        */
+        if (face?.boundingBox) {
+          return face.boundingBox;
+        }
+
+        return null;
+      }
+
+      async function updateFaceTracking(timestamp) {
+        if (
+          !faceDetector ||
+          faceDetectionBusy ||
+          video.readyState <
+            HTMLMediaElement.HAVE_CURRENT_DATA
+        ) {
+          return;
+        }
+
+        if (
+          timestamp - lastFaceDetectionAt <
+          faceCheckIntervalMs
+        ) {
+          return;
+        }
+
+        faceDetectionBusy = true;
+        lastFaceDetectionAt = timestamp;
+
+        try {
+          const faces =
+            await faceDetector.estimateFaces(
+              video,
+              {
+                flipHorizontal: false
+              }
+            );
+
+          /*
+            Require exactly one face. If there are zero faces or
+            multiple faces, the Center-Stage-style start gate resets.
+          */
+          if (faces.length !== 1) {
+            faceState.valid = false;
+            stableFaceFrames = 0;
+            return;
+          }
+
+          const box = getFaceBox(faces[0]);
+
+          if (
+            !box ||
+            !video.videoWidth ||
+            !video.videoHeight
+          ) {
+            faceState.valid = false;
+            stableFaceFrames = 0;
+            return;
+          }
+
+          const centerX =
+            (box.xMin + box.width / 2) /
+            video.videoWidth;
+
+          const centerY =
+            (box.yMin + box.height / 2) /
+            video.videoHeight;
+
+          const widthRatio =
+            box.width / video.videoWidth;
+
+          const centered =
+            centerX >= faceCenterMinX &&
+            centerX <= faceCenterMaxX &&
+            centerY >= faceCenterMinY &&
+            centerY <= faceCenterMaxY;
+
+          const largeEnough =
+            widthRatio >= minFaceWidthRatio;
+
+          const validFace =
+            centered && largeEnough;
+
+          faceState.valid = validFace;
+          faceState.centerX = centerX;
+          faceState.centerY = centerY;
+          faceState.widthRatio = widthRatio;
+
+          if (validFace) {
+            faceState.lastSeenAt = timestamp;
+
+            stableFaceFrames += 1;
+          } else {
+            stableFaceFrames = 0;
+          }
+
+        } catch (error) {
+          console.warn("Face detection frame failed:", error);
+
+        } finally {
+          faceDetectionBusy = false;
+        }
+      }
+
       /*
-        Turn the TF.js output mask ImageData into:
-        - a mirrored binary mask for collision
-        - a green translucent canvas image for visual feedback
-        - an active area/bounding box for validation and speed
+        Converts the segmentation output into a mirrored binary player
+        mask. It returns true only when enough of the frame is clearly
+        categorized as foreground person.
       */
       function updatePlayerMask(maskImageData) {
         const sourceWidth = maskImageData.width;
@@ -535,10 +715,6 @@
             const sourceRgbaIndex =
               sourceIndex * 4;
 
-            /*
-              The body-segmentation output uses alpha as the
-              probability/confidence of a person pixel.
-            */
             const alpha =
               sourcePixels[sourceRgbaIndex + 3];
 
@@ -547,8 +723,8 @@
             }
 
             /*
-              The video is mirrored using CSS scaleX(-1).
-              Mirror mask pixels here to match screen coordinates.
+              The video display is mirrored with CSS, so mirror the
+              mask horizontally before it is used or drawn.
             */
             const mirroredX =
               sourceWidth - 1 - x;
@@ -575,15 +751,10 @@
           }
         }
 
-        const totalPixels = sourceWidth * sourceHeight;
-
         const bodyAreaRatio =
-          activePixelCount / totalPixels;
+          activePixelCount /
+          (sourceWidth * sourceHeight);
 
-        /*
-          Reject weak/noisy masks. This is the key criterion that
-          prevents gameplay from beginning without a clear person.
-        */
         if (
           activePixelCount === 0 ||
           bodyAreaRatio < minBodyAreaRatio
@@ -618,7 +789,7 @@
         return true;
       }
 
-      async function updateSegmentation(timestamp) {
+      async function updateBodySegmentation(timestamp) {
         if (
           !segmenter ||
           segmentationBusy ||
@@ -640,9 +811,26 @@
 
         try {
           /*
-            `flipHorizontal: false` because mirroring is applied
-            explicitly when copying the final mask.
+            A valid centered face is required before we spend work
+            on body confirmation. It also prevents the body mask
+            alone from starting the game.
           */
+          if (
+            stableFaceFrames <
+            requiredStableFaceFrames
+          ) {
+            stableBodyFrames = 0;
+
+            if (
+              timestamp - player.lastTrackedAt >
+              trackingGraceMs
+            ) {
+              clearPlayerMask();
+            }
+
+            return;
+          }
+
           const people =
             await segmenter.segmentPeople(
               video,
@@ -656,7 +844,7 @@
           const person = people?.[0];
 
           if (!person?.mask) {
-            stableFrames = 0;
+            stableBodyFrames = 0;
 
             if (
               timestamp - player.lastTrackedAt >
@@ -668,10 +856,6 @@
             return;
           }
 
-          /*
-            toImageData gives us RGBA output. Alpha carries the
-            foreground/person confidence required for collision.
-          */
           const maskImageData =
             await person.mask.toImageData();
 
@@ -679,7 +863,7 @@
             updatePlayerMask(maskImageData);
 
           if (!validBody) {
-            stableFrames = 0;
+            stableBodyFrames = 0;
 
             if (
               timestamp - player.lastTrackedAt >
@@ -693,21 +877,20 @@
 
           player.lastTrackedAt = timestamp;
 
-          if (!gameStarted) {
-            stableFrames += 1;
+          stableBodyFrames += 1;
 
-            if (
-              stableFrames >=
-              requiredStableFrames
-            ) {
-              gameStarted = true;
-              lastLaserEndedAt = timestamp;
-            }
+          if (
+            !gameStarted &&
+            stableBodyFrames >=
+              requiredStableBodyFrames
+          ) {
+            gameStarted = true;
+            lastLaserEndedAt = timestamp;
           }
 
         } catch (error) {
           console.warn(
-            "TensorFlow segmentation frame failed:",
+            "Body segmentation frame failed:",
             error
           );
 
@@ -759,10 +942,13 @@
 
       function updateLaser(timestamp) {
         /*
-          If tracking vanishes, lasers are harmless and no new
-          laser appears until a person is tracked again.
+          Existing or future lasers are harmless until both systems
+          agree that a tracked foreground person remains present.
         */
-        if (!gameStarted || !player.tracked) {
+        if (
+          !gameStarted ||
+          !player.tracked
+        ) {
           return;
         }
 
@@ -852,11 +1038,6 @@
         );
       }
 
-      /*
-        Sample the laser beam against the segmentation silhouette.
-        A laser only harms the player if its red active beam overlaps
-        real person-mask pixels.
-      */
       function laserHitsPlayer(laserObject) {
         if (!player.tracked || !player.pixels) {
           return false;
@@ -867,7 +1048,8 @@
           laserObject.thickness / 2;
 
         if (
-          laserObject.orientation === "horizontal"
+          laserObject.orientation ===
+          "horizontal"
         ) {
           const y = laserObject.linePosition;
 
@@ -928,7 +1110,7 @@
 
         ctx.save();
 
-        ctx.globalAlpha = 0.76;
+        ctx.globalAlpha = 0.74;
         ctx.imageSmoothingEnabled = true;
 
         ctx.drawImage(
@@ -942,6 +1124,64 @@
           window.innerWidth,
           window.innerHeight
         );
+
+        ctx.restore();
+      }
+
+      function drawFaceGuide() {
+        if (
+          gameStarted ||
+          !faceDetector ||
+          gameOver
+        ) {
+          return;
+        }
+
+        const x = faceState.centerX * window.innerWidth;
+        const y = faceState.centerY * window.innerHeight;
+
+        ctx.save();
+
+        /*
+          Center-stage-style frame guide. It is only an indicator;
+          it is not part of collision or body tracking.
+        */
+        ctx.strokeStyle = faceState.valid
+          ? "#62ffc1"
+          : "#ffe66d";
+
+        ctx.lineWidth = 3;
+        ctx.setLineDash([8, 7]);
+
+        const guideWidth =
+          window.innerWidth *
+          (faceCenterMaxX - faceCenterMinX);
+
+        const guideHeight =
+          window.innerHeight *
+          (faceCenterMaxY - faceCenterMinY);
+
+        const guideX =
+          window.innerWidth * faceCenterMinX;
+
+        const guideY =
+          window.innerHeight * faceCenterMinY;
+
+        ctx.strokeRect(
+          guideX,
+          guideY,
+          guideWidth,
+          guideHeight
+        );
+
+        ctx.setLineDash([]);
+
+        if (faceState.valid) {
+          ctx.fillStyle = "#62ffc1";
+          ctx.beginPath();
+          ctx.arc(x, y, 7, 0, Math.PI * 2);
+          ctx.fill();
+        }
 
         ctx.restore();
       }
@@ -970,7 +1210,8 @@
         ctx.save();
 
         if (
-          laser.orientation === "horizontal"
+          laser.orientation ===
+          "horizontal"
         ) {
           const y = laser.linePosition;
 
@@ -1045,10 +1286,12 @@
             ctx.setLineDash([]);
 
             ctx.save();
+
             ctx.translate(
               x - 15,
               window.innerHeight / 2
             );
+
             ctx.rotate(-Math.PI / 2);
 
             ctx.fillStyle = "#ffe1dc";
@@ -1100,6 +1343,7 @@
         ctx.save();
 
         ctx.fillStyle = "rgba(0, 0, 0, 0.46)";
+
         ctx.fillRect(
           0,
           window.innerHeight - 70,
@@ -1111,14 +1355,23 @@
         ctx.font = "bold 16px Arial";
         ctx.textAlign = "center";
 
-        let message = "LOADING TENSORFLOW PERSON DETECTION…";
+        let message =
+          "LOADING FACE AND BODY TRACKING…";
 
-        if (segmenter && !player.tracked) {
-          message =
-            "STEP INTO VIEW — LASERS STAY OFF UNTIL A PERSON IS DETECTED";
-        } else if (segmenter && player.tracked) {
-          message =
-            "PERSON DETECTED — HOLD STILL FOR TRACKING CONFIRMATION";
+        if (faceDetector && segmenter) {
+          if (
+            stableFaceFrames <
+            requiredStableFaceFrames
+          ) {
+            message =
+              "CENTER ONE FACE IN THE GUIDE — LASERS OFF";
+          } else if (
+            stableBodyFrames <
+            requiredStableBodyFrames
+          ) {
+            message =
+              "FACE CONFIRMED — CHECKING BODY SILHOUETTE";
+          }
         }
 
         ctx.fillText(
@@ -1138,6 +1391,7 @@
         ctx.save();
 
         ctx.fillStyle = "rgba(0, 0, 0, 0.70)";
+
         ctx.fillRect(
           0,
           0,
@@ -1184,6 +1438,7 @@
         );
 
         drawBodyMask();
+        drawFaceGuide();
         drawLaser();
         drawWaitingOverlay();
         drawGameOver();
@@ -1194,9 +1449,8 @@
           return;
         }
 
-        loop.lastTime ??= timestamp;
-
-        updateSegmentation(timestamp);
+        updateFaceTracking(timestamp);
+        updateBodySegmentation(timestamp);
         updateLaser(timestamp);
 
         draw();
@@ -1222,6 +1476,13 @@
             mediaStream.getTracks().forEach(
               (track) => track.stop()
             );
+          }
+
+          if (
+            faceDetector &&
+            typeof faceDetector.dispose === "function"
+          ) {
+            faceDetector.dispose();
           }
 
           if (
