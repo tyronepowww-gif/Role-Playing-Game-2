@@ -6,8 +6,8 @@
     name="viewport"
     content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no"
   />
-  <meta name="theme-color" content="#090909" />
-  <title>Mobility Dodge — Segmentation Mask</title>
+  <meta name="theme-color" content="#05070b" />
+  <title>Laser Dodge</title>
 
   <style>
     * {
@@ -20,7 +20,7 @@
       height: 100%;
       margin: 0;
       overflow: hidden;
-      background: #090909;
+      background: #05070b;
       font-family: Arial, Helvetica, sans-serif;
     }
 
@@ -35,14 +35,14 @@
 
     #app {
       overflow: hidden;
-      background: #090909;
+      background: #05070b;
     }
 
     #video {
       z-index: 1;
       object-fit: cover;
       transform: scaleX(-1);
-      opacity: 0.38;
+      opacity: 0.36;
       background: #000;
     }
 
@@ -51,19 +51,29 @@
       pointer-events: none;
     }
 
-    #info {
+    #hud {
       position: fixed;
       z-index: 5;
       top: 12px;
       left: 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
       max-width: calc(100vw - 24px);
-      padding: 10px 12px;
-      border: 1px solid rgba(255, 255, 255, 0.16);
-      border-radius: 10px;
-      background: rgba(0, 0, 0, 0.72);
       color: #ffffff;
-      font-size: 15px;
-      line-height: 1.4;
+      font-size: 14px;
+    }
+
+    .hud-item {
+      padding: 9px 11px;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 9px;
+      background: rgba(0, 0, 0, 0.70);
+      line-height: 1.2;
+    }
+
+    #status {
+      color: #dbe7ff;
     }
 
     #permission-panel {
@@ -76,32 +86,32 @@
       background:
         radial-gradient(
           circle at center,
-          rgba(35, 74, 82, 0.45),
-          rgba(0, 0, 0, 0.88) 65%
+          rgba(52, 16, 36, 0.48),
+          rgba(0, 0, 0, 0.90) 68%
         );
     }
 
     #permission-card {
-      width: min(430px, 100%);
+      width: min(440px, 100%);
       padding: 24px;
       border: 1px solid rgba(255, 255, 255, 0.18);
       border-radius: 16px;
-      background: rgba(12, 12, 12, 0.95);
+      background: rgba(11, 12, 18, 0.96);
       color: #ffffff;
       text-align: center;
-      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
     }
 
     #permission-card h1 {
       margin: 0 0 12px;
-      font-size: 24px;
+      font-size: 26px;
     }
 
     #permission-card p {
       margin: 0 0 18px;
-      color: #d7d7d7;
+      color: #d3d8e5;
       font-size: 15px;
-      line-height: 1.5;
+      line-height: 1.55;
     }
 
     #camera-permission {
@@ -109,7 +119,7 @@
       padding: 13px 18px;
       border: 0;
       border-radius: 10px;
-      background: #55e6ff;
+      background: #73f5ff;
       color: #001018;
       cursor: pointer;
       font-size: 16px;
@@ -117,7 +127,7 @@
     }
 
     #camera-permission:hover {
-      background: #8aeeff;
+      background: #a3f9ff;
     }
 
     #camera-permission:disabled {
@@ -136,14 +146,21 @@
     <video id="video" autoplay muted playsinline></video>
     <canvas id="canvas"></canvas>
 
-    <div id="info">Camera access is required.</div>
+    <div id="hud">
+      <div class="hud-item" id="score-display">Score: 0</div>
+      <div class="hud-item" id="health-display">Health: 3</div>
+      <div class="hud-item" id="status">
+        Camera permission required
+      </div>
+    </div>
 
     <section id="permission-panel" aria-live="polite">
       <div id="permission-card">
-        <h1>Mobility Dodge</h1>
+        <h1>Laser Dodge</h1>
 
         <p id="permission-message">
-          Allow camera access to create your live body silhouette.
+          Allow camera access. The game begins only when a person is clearly
+          separated from the background.
         </p>
 
         <button id="camera-permission" type="button">
@@ -153,20 +170,36 @@
     </section>
   </main>
 
+  <!-- TensorFlow.js core and WebGL backend -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.22.0/dist/tf-core.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.22.0/dist/tf-backend-webgl.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter@4.22.0/dist/tf-converter.min.js"></script>
+
+  <!-- TensorFlow.js person/body segmentation package -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/body-segmentation@1.0.2/dist/body-segmentation.min.js"></script>
+
   <script>
     (() => {
       const video = document.getElementById("video");
       const canvas = document.getElementById("canvas");
       const ctx = canvas.getContext("2d");
 
-      const info = document.getElementById("info");
-      const permissionPanel = document.getElementById("permission-panel");
-      const permissionMessage = document.getElementById("permission-message");
-      const permissionButton = document.getElementById("camera-permission");
+      const scoreDisplay = document.getElementById("score-display");
+      const healthDisplay = document.getElementById("health-display");
+      const statusDisplay = document.getElementById("status");
+
+      const permissionPanel =
+        document.getElementById("permission-panel");
+
+      const permissionMessage =
+        document.getElementById("permission-message");
+
+      const permissionButton =
+        document.getElementById("camera-permission");
 
       /*
-        A small offscreen canvas holds the current mask.
-        It is not added to the page.
+        This offscreen canvas stores a low-resolution green silhouette.
+        It is used for rendering and exact pixel collision checks.
       */
       const maskCanvas = document.createElement("canvas");
       const maskCtx = maskCanvas.getContext(
@@ -175,46 +208,61 @@
       );
 
       let mediaStream = null;
-      let poseLandmarker = null;
-      let poseLoading = false;
+      let segmenter = null;
+      let segmenterLoading = false;
 
-      let lastVideoTime = -1;
+      let segmentationBusy = false;
       let lastSegmentationAt = 0;
 
       let running = false;
+      let gameStarted = false;
       let gameOver = false;
 
       let score = 0;
       let health = 3;
-      let projectile = null;
-      let lastSpawnTime = 0;
+
+      let laser = null;
+      let lastLaserEndedAt = 0;
 
       /*
-        20 FPS for mask inference. The normal draw loop remains
-        requestAnimationFrame speed.
+        Run TensorFlow segmentation below drawing framerate.
+        This keeps camera/game animation responsive.
       */
-      const segmentationIntervalMs = 50;
+      const segmentationIntervalMs = 75;
 
       /*
-        Person-mask confidence threshold. Raise this when the mask
-        includes too much background; lower it if the silhouette
-        becomes too fragmented.
+        Pixels whose alpha is at least this value count as person.
+        TensorFlow body-segmentation masks use alpha as confidence.
       */
-      const maskThreshold = 0.55;
+      const personAlphaThreshold = 145;
 
       /*
-        Persist the last valid silhouette briefly to avoid flicker
-        if MediaPipe misses one video frame.
+        A person silhouette needs to cover this percentage of the input
+        before it is accepted as real gameplay tracking.
       */
-      const trackingGraceMs = 650;
+      const minBodyAreaRatio = 0.018;
+
+      /*
+        Require a stable person mask across several segmentation results
+        before enabling lasers.
+      */
+      const requiredStableFrames = 8;
+
+      /*
+        Briefly preserve the last mask so the game does not flicker
+        when a single segmentation result is weak or delayed.
+      */
+      const trackingGraceMs = 800;
+
+      let stableFrames = 0;
 
       const player = {
         tracked: false,
         lastTrackedAt: 0,
 
         /*
-          This is a binary Uint8Array:
-          255 = player pixel
+          `pixels` is one byte per mask pixel:
+          255 = person
           0 = background
         */
         pixels: null,
@@ -222,14 +270,12 @@
         width: 0,
         height: 0,
 
-        /*
-          Screen-space bounding rectangle of active body pixels.
-          Used only to make collision work faster.
-        */
         minX: 0,
         minY: 0,
         maxX: 0,
-        maxY: 0
+        maxY: 0,
+
+        activePixelCount: 0
       };
 
       function resizeCanvas() {
@@ -244,9 +290,8 @@
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       }
 
-      function resetPlayerMask() {
+      function clearPlayerMask() {
         player.tracked = false;
-        player.lastTrackedAt = 0;
         player.pixels = null;
         player.width = 0;
         player.height = 0;
@@ -254,6 +299,7 @@
         player.minY = 0;
         player.maxX = 0;
         player.maxY = 0;
+        player.activePixelCount = 0;
 
         maskCanvas.width = 1;
         maskCanvas.height = 1;
@@ -262,16 +308,52 @@
       function resetGame() {
         score = 0;
         health = 3;
-        projectile = null;
-        lastSpawnTime = performance.now();
+        laser = null;
 
-        lastVideoTime = -1;
+        lastLaserEndedAt = performance.now();
         lastSegmentationAt = 0;
         loop.lastTime = undefined;
 
-        resetPlayerMask();
-
+        gameStarted = false;
         gameOver = false;
+        stableFrames = 0;
+
+        player.lastTrackedAt = 0;
+        clearPlayerMask();
+
+        updateHud();
+      }
+
+      function updateHud() {
+        scoreDisplay.textContent = `Score: ${score}`;
+        healthDisplay.textContent = `Health: ${health}`;
+
+        if (gameOver) {
+          statusDisplay.textContent =
+            "Game over — refresh the page to play again.";
+          return;
+        }
+
+        if (!segmenter) {
+          statusDisplay.textContent =
+            "Loading person detection…";
+          return;
+        }
+
+        if (!player.tracked) {
+          statusDisplay.textContent =
+            "Looking for a person — lasers inactive.";
+          return;
+        }
+
+        if (!gameStarted) {
+          statusDisplay.textContent =
+            `Person found — stabilizing ${stableFrames}/${requiredStableFrames}`;
+          return;
+        }
+
+        statusDisplay.textContent =
+          "Person tracked — dodge the red laser.";
       }
 
       function showCameraError(error) {
@@ -284,19 +366,19 @@
 
         if (!window.isSecureContext) {
           message =
-            "Camera access requires HTTPS. Open your GitHub Pages URL, not a downloaded file or HTTP address.";
+            "Camera access requires HTTPS. Open the GitHub Pages URL, not a local file or HTTP address.";
         } else if (!navigator.mediaDevices?.getUserMedia) {
           message =
-            "This browser does not support camera access through MediaDevices.";
+            "This browser does not support camera access.";
         } else if (error?.name === "NotAllowedError") {
           message =
-            "Camera permission was blocked. Use the camera or lock icon in the address bar, allow the camera for this site, then try again.";
+            "Camera permission was blocked. Use the camera or lock icon in the browser address bar, allow camera access for this site, then try again.";
         } else if (error?.name === "NotFoundError") {
           message =
             "No usable camera was found on this device.";
         } else if (error?.name === "NotReadableError") {
           message =
-            "The camera is in use by another app or browser tab.";
+            "The camera is busy in another app or browser tab.";
         } else {
           message =
             `Camera could not start: ${
@@ -305,7 +387,7 @@
         }
 
         permissionMessage.textContent = message;
-        info.textContent = "Camera access has not been granted.";
+        statusDisplay.textContent = "Camera access was not granted.";
       }
 
       async function enableCamera(event) {
@@ -338,16 +420,15 @@
             "Your browser should now display its camera permission dialog.";
 
           /*
-            Call this directly from the button event. Browser camera
-            permission prompts require a real user gesture.
+            Browser camera permission needs to be called directly from
+            this click event.
           */
-          const stream = await navigator.mediaDevices.getUserMedia({
+          mediaStream = await navigator.mediaDevices.getUserMedia({
             video: true,
             audio: false
           });
 
-          mediaStream = stream;
-          video.srcObject = stream;
+          video.srcObject = mediaStream;
 
           await video.play();
 
@@ -355,117 +436,88 @@
 
           permissionPanel.classList.add("hidden");
 
-          info.textContent =
-            "Camera active. Loading body segmentation…";
+          statusDisplay.textContent =
+            "Camera active. Loading TensorFlow person detection…";
 
           running = true;
 
           requestAnimationFrame(loop);
 
-          loadPoseTracking();
+          loadTensorFlowSegmenter();
 
         } catch (error) {
           showCameraError(error);
         }
       }
 
-      async function loadPoseTracking() {
-        if (poseLandmarker || poseLoading) {
+      async function loadTensorFlowSegmenter() {
+        if (segmenter || segmenterLoading) {
           return;
         }
 
-        poseLoading = true;
+        segmenterLoading = true;
 
         try {
-          const {
-            FilesetResolver,
-            PoseLandmarker
-          } = await import(
-            "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/+esm"
-          );
+          if (!window.tf || !window.bodySegmentation) {
+            throw new Error(
+              "TensorFlow.js libraries did not load. Check your internet connection and reload."
+            );
+          }
 
-          const vision = await FilesetResolver.forVisionTasks(
-            "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm"
-          );
+          await tf.setBackend("webgl");
+          await tf.ready();
 
-          poseLandmarker = await PoseLandmarker.createFromOptions(
-            vision,
+          const model =
+            bodySegmentation.SupportedModels
+              .MediaPipeSelfieSegmentation;
+
+          /*
+            runtime: "tfjs" means inference runs through TensorFlow.js.
+            "general" is better when more of the body may be visible.
+          */
+          segmenter = await bodySegmentation.createSegmenter(
+            model,
             {
-              baseOptions: {
-                modelAssetPath:
-                  "https://storage.googleapis.com/mediapipe-models/" +
-                  "pose_landmarker/pose_landmarker_lite/float16/1/" +
-                  "pose_landmarker_lite.task",
-                delegate: "CPU"
-              },
-              runningMode: "VIDEO",
-              numPoses: 1,
-
-              /*
-                This enables result.segmentationMasks.
-              */
-              outputSegmentationMasks: true,
-
-              minPoseDetectionConfidence: 0.55,
-              minPosePresenceConfidence: 0.55,
-              minTrackingConfidence: 0.55
+              runtime: "tfjs",
+              modelType: "general"
             }
           );
 
-          info.textContent =
-            "Segmentation ready. Stand in view to activate your body silhouette.";
+          updateHud();
 
         } catch (error) {
-          console.warn("Body segmentation could not load:", error);
+          console.error("TensorFlow segmentation error:", error);
 
-          info.textContent =
-            "Camera active, but body segmentation could not load.";
+          statusDisplay.textContent =
+            "Camera active, but TensorFlow person detection could not load.";
 
         } finally {
-          poseLoading = false;
+          segmenterLoading = false;
         }
-      }
-
-      function clearPlayerMask() {
-        player.tracked = false;
-        player.pixels = null;
-        player.width = 0;
-        player.height = 0;
-        player.minX = 0;
-        player.minY = 0;
-        player.maxX = 0;
-        player.maxY = 0;
       }
 
       /*
-        Convert MediaPipe's single-channel confidence mask into:
-        1. a binary hit-test array
-        2. a green RGBA image for drawing
-        3. an active-pixel bounding box for fast rejection
-
-        The video is mirrored in CSS. Therefore the code mirrors
-        mask X values while writing to the screen-aligned mask.
+        Turn the TF.js output mask ImageData into:
+        - a mirrored binary mask for collision
+        - a green translucent canvas image for visual feedback
+        - an active area/bounding box for validation and speed
       */
-      function updatePlayerMask(mask) {
-        const sourceWidth = mask.width;
-        const sourceHeight = mask.height;
+      function updatePlayerMask(maskImageData) {
+        const sourceWidth = maskImageData.width;
+        const sourceHeight = maskImageData.height;
 
         if (!sourceWidth || !sourceHeight) {
           clearPlayerMask();
-          return;
+          return false;
         }
 
-        /*
-          MPMask can provide a Float32Array with person confidence
-          values. Copy it immediately while the result is valid.
-        */
-        const confidence = mask.getAsFloat32Array();
+        const sourcePixels = maskImageData.data;
 
         const binary = new Uint8Array(
           sourceWidth * sourceHeight
         );
 
-        const rgba = new Uint8ClampedArray(
+        const greenRgba = new Uint8ClampedArray(
           sourceWidth * sourceHeight * 4
         );
 
@@ -473,55 +525,85 @@
         let minY = sourceHeight;
         let maxX = -1;
         let maxY = -1;
+        let activePixelCount = 0;
 
         for (let y = 0; y < sourceHeight; y += 1) {
           for (let x = 0; x < sourceWidth; x += 1) {
-            const sourceIndex = y * sourceWidth + x;
+            const sourceIndex =
+              y * sourceWidth + x;
+
+            const sourceRgbaIndex =
+              sourceIndex * 4;
 
             /*
-              Store the mirrored value. This aligns it with the
-              CSS-mirrored video and screen-space projectile logic.
+              The body-segmentation output uses alpha as the
+              probability/confidence of a person pixel.
             */
-            const mirroredX = sourceWidth - 1 - x;
+            const alpha =
+              sourcePixels[sourceRgbaIndex + 3];
+
+            if (alpha < personAlphaThreshold) {
+              continue;
+            }
+
+            /*
+              The video is mirrored using CSS scaleX(-1).
+              Mirror mask pixels here to match screen coordinates.
+            */
+            const mirroredX =
+              sourceWidth - 1 - x;
 
             const targetIndex =
               y * sourceWidth + mirroredX;
 
-            const value = confidence[sourceIndex];
+            const targetRgbaIndex =
+              targetIndex * 4;
 
-            if (value >= maskThreshold) {
-              binary[targetIndex] = 255;
+            binary[targetIndex] = 255;
 
-              const colorIndex = targetIndex * 4;
+            greenRgba[targetRgbaIndex] = 72;
+            greenRgba[targetRgbaIndex + 1] = 255;
+            greenRgba[targetRgbaIndex + 2] = 180;
+            greenRgba[targetRgbaIndex + 3] = 128;
 
-              rgba[colorIndex] = 82;
-              rgba[colorIndex + 1] = 255;
-              rgba[colorIndex + 2] = 183;
-              rgba[colorIndex + 3] = 150;
+            activePixelCount += 1;
 
-              if (mirroredX < minX) minX = mirroredX;
-              if (mirroredX > maxX) maxX = mirroredX;
-              if (y < minY) minY = y;
-              if (y > maxY) maxY = y;
-            }
+            if (mirroredX < minX) minX = mirroredX;
+            if (mirroredX > maxX) maxX = mirroredX;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
           }
         }
 
-        if (maxX < minX || maxY < minY) {
+        const totalPixels = sourceWidth * sourceHeight;
+
+        const bodyAreaRatio =
+          activePixelCount / totalPixels;
+
+        /*
+          Reject weak/noisy masks. This is the key criterion that
+          prevents gameplay from beginning without a clear person.
+        */
+        if (
+          activePixelCount === 0 ||
+          bodyAreaRatio < minBodyAreaRatio
+        ) {
           clearPlayerMask();
-          return;
+          return false;
         }
 
         maskCanvas.width = sourceWidth;
         maskCanvas.height = sourceHeight;
 
-        const imageData = new ImageData(
-          rgba,
-          sourceWidth,
-          sourceHeight
+        maskCtx.putImageData(
+          new ImageData(
+            greenRgba,
+            sourceWidth,
+            sourceHeight
+          ),
+          0,
+          0
         );
-
-        maskCtx.putImageData(imageData, 0, 0);
 
         player.pixels = binary;
         player.width = sourceWidth;
@@ -530,39 +612,52 @@
         player.minY = minY;
         player.maxX = maxX;
         player.maxY = maxY;
+        player.activePixelCount = activePixelCount;
         player.tracked = true;
+
+        return true;
       }
 
-      function updateSegmentation(timestamp) {
+      async function updateSegmentation(timestamp) {
         if (
-          !poseLandmarker ||
-          video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
+          !segmenter ||
+          segmentationBusy ||
+          video.readyState <
+            HTMLMediaElement.HAVE_CURRENT_DATA
         ) {
           return;
         }
 
-        if (timestamp - lastSegmentationAt < segmentationIntervalMs) {
+        if (
+          timestamp - lastSegmentationAt <
+          segmentationIntervalMs
+        ) {
           return;
         }
 
-        if (video.currentTime === lastVideoTime) {
-          return;
-        }
-
+        segmentationBusy = true;
         lastSegmentationAt = timestamp;
-        lastVideoTime = video.currentTime;
-
-        let result = null;
 
         try {
-          result = poseLandmarker.detectForVideo(
-            video,
-            timestamp
-          );
+          /*
+            `flipHorizontal: false` because mirroring is applied
+            explicitly when copying the final mask.
+          */
+          const people =
+            await segmenter.segmentPeople(
+              video,
+              {
+                flipHorizontal: false,
+                multiSegmentation: false,
+                segmentBodyParts: false
+              }
+            );
 
-          const mask = result.segmentationMasks?.[0];
+          const person = people?.[0];
 
-          if (!mask) {
+          if (!person?.mask) {
+            stableFrames = 0;
+
             if (
               timestamp - player.lastTrackedAt >
               trackingGraceMs
@@ -573,132 +668,155 @@
             return;
           }
 
-          updatePlayerMask(mask);
+          /*
+            toImageData gives us RGBA output. Alpha carries the
+            foreground/person confidence required for collision.
+          */
+          const maskImageData =
+            await person.mask.toImageData();
 
-          if (player.tracked) {
-            player.lastTrackedAt = timestamp;
+          const validBody =
+            updatePlayerMask(maskImageData);
+
+          if (!validBody) {
+            stableFrames = 0;
+
+            if (
+              timestamp - player.lastTrackedAt >
+              trackingGraceMs
+            ) {
+              clearPlayerMask();
+            }
+
+            return;
+          }
+
+          player.lastTrackedAt = timestamp;
+
+          if (!gameStarted) {
+            stableFrames += 1;
+
+            if (
+              stableFrames >=
+              requiredStableFrames
+            ) {
+              gameStarted = true;
+              lastLaserEndedAt = timestamp;
+            }
           }
 
         } catch (error) {
-          console.warn("Segmentation frame failed:", error);
+          console.warn(
+            "TensorFlow segmentation frame failed:",
+            error
+          );
+
         } finally {
-          /*
-            MediaPipe MPMask objects own native/WASM resources.
-            Close the result masks once their values have been copied.
-          */
-          if (result?.segmentationMasks) {
-            result.segmentationMasks.forEach((resultMask) => {
-              if (typeof resultMask.close === "function") {
-                resultMask.close();
-              }
-            });
-          }
+          segmentationBusy = false;
         }
       }
 
-      function spawnProjectile() {
-        /*
-          No body silhouette means no dangerous projectile.
-        */
-        if (!player.tracked || !player.pixels) {
+      function chooseLaserOrientation() {
+        return Math.random() > 0.5
+          ? "horizontal"
+          : "vertical";
+      }
+
+      function spawnLaser(timestamp) {
+        if (!gameStarted || !player.tracked) {
           return;
         }
 
-        const fromLeft = Math.random() > 0.5;
+        const orientation =
+          chooseLaserOrientation();
 
-        const startX = fromLeft
-          ? -60
-          : window.innerWidth + 60;
+        const linePosition =
+          orientation === "horizontal"
+            ? 70 +
+              Math.random() *
+              Math.max(
+                80,
+                window.innerHeight - 140
+              )
+            : 70 +
+              Math.random() *
+              Math.max(
+                80,
+                window.innerWidth - 140
+              );
 
-        const startY =
-          80 +
-          Math.random() *
-          Math.max(80, window.innerHeight - 160);
+        laser = {
+          orientation,
+          linePosition,
+          createdAt: timestamp,
+          warningTime: 850,
+          activeTime: 950,
+          thickness: 20,
+          active: false,
+          damageApplied: false
+        };
+      }
 
+      function updateLaser(timestamp) {
         /*
-          Choose a random active body-mask pixel as the warning target.
+          If tracking vanishes, lasers are harmless and no new
+          laser appears until a person is tracked again.
         */
-        const target = randomBodyPoint();
-
-        if (!target) {
+        if (!gameStarted || !player.tracked) {
           return;
         }
 
-        const dx = target.x - startX;
-        const dy = target.y - startY;
+        if (!laser) {
+          if (timestamp - lastLaserEndedAt > 1100) {
+            spawnLaser(timestamp);
+          }
 
-        const length = Math.hypot(dx, dy) || 1;
-        const speed = 500;
-
-        projectile = {
-          x: startX,
-          y: startY,
-          vx: (dx / length) * speed,
-          vy: (dy / length) * speed,
-          targetX: target.x,
-          targetY: target.y,
-          radius: 16,
-          createdAt: performance.now(),
-          warningTime: 700,
-          fired: false
-        };
-      }
-
-      function randomBodyPoint() {
-        if (!player.pixels || !player.tracked) {
-          return null;
+          return;
         }
 
-        /*
-          Try random pixels inside the active bounding box.
-          This is much cheaper than rebuilding a full list every frame.
-        */
-        for (let attempt = 0; attempt < 80; attempt += 1) {
-          const maskX =
-            player.minX +
-            Math.floor(
-              Math.random() *
-              (player.maxX - player.minX + 1)
-            );
+        const elapsed =
+          timestamp - laser.createdAt;
 
-          const maskY =
-            player.minY +
-            Math.floor(
-              Math.random() *
-              (player.maxY - player.minY + 1)
-            );
+        if (
+          !laser.active &&
+          elapsed >= laser.warningTime
+        ) {
+          laser.active = true;
+        }
 
-          const index =
-            maskY * player.width + maskX;
+        if (
+          laser.active &&
+          !laser.damageApplied &&
+          laserHitsPlayer(laser)
+        ) {
+          laser.damageApplied = true;
+          health -= 1;
 
-          if (player.pixels[index] === 255) {
-            return {
-              x: ((maskX + 0.5) / player.width) *
-                window.innerWidth,
-
-              y: ((maskY + 0.5) / player.height) *
-                window.innerHeight
-            };
+          if (health <= 0) {
+            running = false;
+            gameOver = true;
+            updateHud();
+            return;
           }
         }
 
-        /*
-          A fallback point in the center of the body bounding box.
-        */
-        return {
-          x:
-            ((player.minX + player.maxX + 1) /
-              (2 * player.width)) *
-            window.innerWidth,
+        if (
+          elapsed >=
+          laser.warningTime + laser.activeTime
+        ) {
+          if (!laser.damageApplied) {
+            score += 1;
+          }
 
-          y:
-            ((player.minY + player.maxY + 1) /
-              (2 * player.height)) *
-            window.innerHeight
-        };
+          laser = null;
+          lastLaserEndedAt = timestamp;
+        }
       }
 
-      function bodyMaskContainsScreenPoint(screenX, screenY) {
+      function bodyMaskContainsScreenPoint(
+        screenX,
+        screenY
+      ) {
         if (
           !player.tracked ||
           !player.pixels ||
@@ -709,11 +827,13 @@
         }
 
         const maskX = Math.floor(
-          (screenX / window.innerWidth) * player.width
+          (screenX / window.innerWidth) *
+          player.width
         );
 
         const maskY = Math.floor(
-          (screenY / window.innerHeight) * player.height
+          (screenY / window.innerHeight) *
+          player.height
         );
 
         if (
@@ -725,106 +845,80 @@
           return false;
         }
 
-        const index =
-          maskY * player.width + maskX;
-
-        return player.pixels[index] === 255;
+        return (
+          player.pixels[
+            maskY * player.width + maskX
+          ] === 255
+        );
       }
 
-      function projectileHitsBody(projectileObject) {
+      /*
+        Sample the laser beam against the segmentation silhouette.
+        A laser only harms the player if its red active beam overlaps
+        real person-mask pixels.
+      */
+      function laserHitsPlayer(laserObject) {
         if (!player.tracked || !player.pixels) {
           return false;
         }
 
-        /*
-          Center plus eight perimeter samples makes projectile
-          collision more forgiving than a one-pixel point test.
-        */
-        const radius = projectileObject.radius;
+        const step = 7;
+        const halfThickness =
+          laserObject.thickness / 2;
 
-        const samples = [
-          [0, 0],
-          [radius, 0],
-          [-radius, 0],
-          [0, radius],
-          [0, -radius],
-          [radius * 0.7, radius * 0.7],
-          [-radius * 0.7, radius * 0.7],
-          [radius * 0.7, -radius * 0.7],
-          [-radius * 0.7, -radius * 0.7]
-        ];
+        if (
+          laserObject.orientation === "horizontal"
+        ) {
+          const y = laserObject.linePosition;
 
-        return samples.some(([offsetX, offsetY]) =>
-          bodyMaskContainsScreenPoint(
-            projectileObject.x + offsetX,
-            projectileObject.y + offsetY
-          )
-        );
-      }
-
-      function projectileOut() {
-        const padding = 110;
-
-        return (
-          projectile.x < -padding ||
-          projectile.x > window.innerWidth + padding ||
-          projectile.y < -padding ||
-          projectile.y > window.innerHeight + padding
-        );
-      }
-
-      function updateProjectile(timestamp, deltaMs) {
-        if (!projectile) {
-          if (!player.tracked) {
-            return;
-          }
-
-          if (timestamp - lastSpawnTime > 1300) {
-            spawnProjectile();
-            lastSpawnTime = timestamp;
-          }
-
-          return;
-        }
-
-        if (!projectile.fired) {
-          if (
-            timestamp - projectile.createdAt >=
-            projectile.warningTime
+          for (
+            let x = 0;
+            x < window.innerWidth;
+            x += step
           ) {
-            projectile.fired = true;
+            for (
+              let offset = -halfThickness;
+              offset <= halfThickness;
+              offset += 6
+            ) {
+              if (
+                bodyMaskContainsScreenPoint(
+                  x,
+                  y + offset
+                )
+              ) {
+                return true;
+              }
+            }
           }
 
-          return;
+          return false;
         }
 
-        const dt = deltaMs / 1000;
+        const x = laserObject.linePosition;
 
-        projectile.x += projectile.vx * dt;
-        projectile.y += projectile.vy * dt;
-
-        /*
-          Only green segmentation-mask pixels can take damage.
-        */
-        if (projectileHitsBody(projectile)) {
-          health -= 1;
-          projectile = null;
-
-          if (health <= 0) {
-            running = false;
-            gameOver = true;
-
-            info.textContent =
-              `Game over | Score: ${score} | Refresh to play again.`;
+        for (
+          let y = 0;
+          y < window.innerHeight;
+          y += step
+        ) {
+          for (
+            let offset = -halfThickness;
+            offset <= halfThickness;
+            offset += 6
+          ) {
+            if (
+              bodyMaskContainsScreenPoint(
+                x + offset,
+                y
+              )
+            ) {
+              return true;
+            }
           }
-
-          return;
         }
 
-        if (projectile && projectileOut()) {
-          score += 1;
-          projectile = null;
-        }
+        return false;
       }
 
       function drawBodyMask() {
@@ -834,12 +928,8 @@
 
         ctx.save();
 
-        /*
-          Draw the low-resolution green mask enlarged to the screen.
-          The mask was already mirrored when written, matching video.
-        */
+        ctx.globalAlpha = 0.76;
         ctx.imageSmoothingEnabled = true;
-        ctx.globalAlpha = 0.82;
 
         ctx.drawImage(
           maskCanvas,
@@ -853,126 +943,233 @@
           window.innerHeight
         );
 
-        /*
-          Add a bright label above the visible silhouette.
-        */
-        const topY =
-          (player.minY / player.height) *
-          window.innerHeight;
+        ctx.restore();
+      }
 
-        const centerX =
-          ((player.minX + player.maxX) /
-            (2 * player.width)) *
-          window.innerWidth;
+      function drawLaser() {
+        if (!laser) {
+          return;
+        }
 
-        ctx.globalAlpha = 1;
-        ctx.fillStyle = "#ffffff";
-        ctx.font = "bold 12px Arial";
-        ctx.textAlign = "center";
+        const elapsed =
+          performance.now() - laser.createdAt;
 
-        ctx.fillText(
-          "BODY MASK — DAMAGE ACTIVE",
-          centerX,
-          Math.max(22, topY - 14)
-        );
+        const warning = !laser.active;
+
+        const warningProgress = warning
+          ? Math.min(
+              1,
+              elapsed / laser.warningTime
+            )
+          : 1;
+
+        const pulse =
+          0.62 +
+          Math.sin(performance.now() / 75) * 0.25;
+
+        ctx.save();
+
+        if (
+          laser.orientation === "horizontal"
+        ) {
+          const y = laser.linePosition;
+
+          if (warning) {
+            ctx.strokeStyle =
+              `rgba(255, 88, 88, ${
+                0.30 + warningProgress * 0.40
+              })`;
+
+            ctx.lineWidth = 3;
+            ctx.setLineDash([10, 9]);
+
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(window.innerWidth, y);
+            ctx.stroke();
+
+            ctx.setLineDash([]);
+
+            ctx.fillStyle = "#ffe1dc";
+            ctx.font = "bold 13px Arial";
+            ctx.textAlign = "center";
+
+            ctx.fillText(
+              "LASER LOCKING",
+              window.innerWidth / 2,
+              Math.max(24, y - 16)
+            );
+
+          } else {
+            ctx.strokeStyle =
+              `rgba(255, 24, 48, ${pulse})`;
+
+            ctx.lineWidth =
+              laser.thickness + 16;
+
+            ctx.shadowColor = "#ff1732";
+            ctx.shadowBlur = 28;
+
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(window.innerWidth, y);
+            ctx.stroke();
+
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = "#fff2f2";
+            ctx.lineWidth = 3;
+
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(window.innerWidth, y);
+            ctx.stroke();
+          }
+
+        } else {
+          const x = laser.linePosition;
+
+          if (warning) {
+            ctx.strokeStyle =
+              `rgba(255, 88, 88, ${
+                0.30 + warningProgress * 0.40
+              })`;
+
+            ctx.lineWidth = 3;
+            ctx.setLineDash([10, 9]);
+
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, window.innerHeight);
+            ctx.stroke();
+
+            ctx.setLineDash([]);
+
+            ctx.save();
+            ctx.translate(
+              x - 15,
+              window.innerHeight / 2
+            );
+            ctx.rotate(-Math.PI / 2);
+
+            ctx.fillStyle = "#ffe1dc";
+            ctx.font = "bold 13px Arial";
+            ctx.textAlign = "center";
+
+            ctx.fillText(
+              "LASER LOCKING",
+              0,
+              0
+            );
+
+            ctx.restore();
+
+          } else {
+            ctx.strokeStyle =
+              `rgba(255, 24, 48, ${pulse})`;
+
+            ctx.lineWidth =
+              laser.thickness + 16;
+
+            ctx.shadowColor = "#ff1732";
+            ctx.shadowBlur = 28;
+
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, window.innerHeight);
+            ctx.stroke();
+
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = "#fff2f2";
+            ctx.lineWidth = 3;
+
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, window.innerHeight);
+            ctx.stroke();
+          }
+        }
 
         ctx.restore();
       }
 
-      function drawProjectile() {
-        if (!projectile) {
-          return;
-        }
-
-        if (!projectile.fired) {
-          ctx.save();
-
-          ctx.strokeStyle = "#ffdf5c";
-          ctx.lineWidth = 2;
-          ctx.setLineDash([8, 7]);
-
-          ctx.beginPath();
-          ctx.moveTo(projectile.x, projectile.y);
-          ctx.lineTo(
-            projectile.targetX,
-            projectile.targetY
-          );
-          ctx.stroke();
-
-          ctx.setLineDash([]);
-
-          ctx.beginPath();
-          ctx.arc(
-            projectile.targetX,
-            projectile.targetY,
-            24,
-            0,
-            Math.PI * 2
-          );
-          ctx.stroke();
-
-          ctx.restore();
-
+      function drawWaitingOverlay() {
+        if (gameStarted || gameOver) {
           return;
         }
 
         ctx.save();
 
-        ctx.fillStyle = "#51e5ff";
-
-        ctx.beginPath();
-        ctx.arc(
-          projectile.x,
-          projectile.y,
-          projectile.radius,
-          0,
-          Math.PI * 2
-        );
-        ctx.fill();
-
-        ctx.strokeStyle = "#e2ffff";
-        ctx.lineWidth = 2;
-
-        ctx.beginPath();
-        ctx.arc(
-          projectile.x,
-          projectile.y,
-          projectile.radius + 4,
-          0,
-          Math.PI * 2
-        );
-        ctx.stroke();
-
-        ctx.restore();
-      }
-
-      function drawWaitingStatus() {
-        if (player.tracked || gameOver) {
-          return;
-        }
-
-        ctx.save();
-
-        ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
+        ctx.fillStyle = "rgba(0, 0, 0, 0.46)";
         ctx.fillRect(
           0,
-          window.innerHeight - 62,
+          window.innerHeight - 70,
           window.innerWidth,
-          62
+          70
         );
 
         ctx.fillStyle = "#ffe66d";
         ctx.font = "bold 16px Arial";
         ctx.textAlign = "center";
 
-        const message = poseLandmarker
-          ? "LOOKING FOR BODY SILHOUETTE — DAMAGE OFF"
-          : "LOADING BODY SEGMENTATION — DAMAGE OFF";
+        let message = "LOADING TENSORFLOW PERSON DETECTION…";
+
+        if (segmenter && !player.tracked) {
+          message =
+            "STEP INTO VIEW — LASERS STAY OFF UNTIL A PERSON IS DETECTED";
+        } else if (segmenter && player.tracked) {
+          message =
+            "PERSON DETECTED — HOLD STILL FOR TRACKING CONFIRMATION";
+        }
 
         ctx.fillText(
           message,
           window.innerWidth / 2,
-          window.innerHeight - 26
+          window.innerHeight - 30
+        );
+
+        ctx.restore();
+      }
+
+      function drawGameOver() {
+        if (!gameOver) {
+          return;
+        }
+
+        ctx.save();
+
+        ctx.fillStyle = "rgba(0, 0, 0, 0.70)";
+        ctx.fillRect(
+          0,
+          0,
+          window.innerWidth,
+          window.innerHeight
+        );
+
+        ctx.fillStyle = "#ff6875";
+        ctx.font = "bold 34px Arial";
+        ctx.textAlign = "center";
+
+        ctx.fillText(
+          "GAME OVER",
+          window.innerWidth / 2,
+          window.innerHeight / 2 - 20
+        );
+
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 18px Arial";
+
+        ctx.fillText(
+          `Final score: ${score}`,
+          window.innerWidth / 2,
+          window.innerHeight / 2 + 20
+        );
+
+        ctx.font = "15px Arial";
+
+        ctx.fillText(
+          "Refresh the page to play again",
+          window.innerWidth / 2,
+          window.innerHeight / 2 + 54
         );
 
         ctx.restore();
@@ -987,21 +1184,9 @@
         );
 
         drawBodyMask();
-        drawProjectile();
-        drawWaitingStatus();
-      }
-
-      function updateInfo() {
-        if (gameOver) {
-          return;
-        }
-
-        const trackingState = player.tracked
-          ? "Green body mask: damage active"
-          : "Body mask required: damage off";
-
-        info.textContent =
-          `Score: ${score} | Health: ${health} | ${trackingState}`;
+        drawLaser();
+        drawWaitingOverlay();
+        drawGameOver();
       }
 
       function loop(timestamp) {
@@ -1009,20 +1194,13 @@
           return;
         }
 
-        const previousTime = loop.lastTime ?? timestamp;
-
-        const deltaMs = Math.min(
-          timestamp - previousTime,
-          50
-        );
-
-        loop.lastTime = timestamp;
+        loop.lastTime ??= timestamp;
 
         updateSegmentation(timestamp);
-        updateProjectile(timestamp, deltaMs);
+        updateLaser(timestamp);
 
         draw();
-        updateInfo();
+        updateHud();
 
         requestAnimationFrame(loop);
       }
@@ -1045,10 +1223,18 @@
               (track) => track.stop()
             );
           }
+
+          if (
+            segmenter &&
+            typeof segmenter.dispose === "function"
+          ) {
+            segmenter.dispose();
+          }
         }
       );
 
       resizeCanvas();
+      updateHud();
     })();
   </script>
 </body>
