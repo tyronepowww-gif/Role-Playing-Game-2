@@ -133,7 +133,8 @@
       <h1>Laser Dodge</h1>
 
       <p id="permission-message">
-        Allow camera access. The game begins as soon as a person is visible.
+        Allow camera access. Lasers begin immediately; body detection only
+        decides whether a laser hit you.
       </p>
 
       <button id="allow-camera" type="button">
@@ -142,9 +143,12 @@
     </div>
   </section>
 
+  <!-- TensorFlow.js runtime -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.22.0/dist/tf-core.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.22.0/dist/tf-backend-webgl.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter@4.22.0/dist/tf-converter.min.js"></script>
+
+  <!-- TensorFlow.js body segmentation -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/body-segmentation@1.0.2/dist/body-segmentation.min.js"></script>
 
   <script>
@@ -167,7 +171,8 @@
         document.getElementById("allow-camera");
 
       /*
-        Offscreen canvas used for the visual green foreground mask.
+        The mask canvas is never displayed directly. It stores the
+        current green person silhouette at model-mask resolution.
       */
       const maskCanvas = document.createElement("canvas");
       const maskCtx = maskCanvas.getContext(
@@ -181,9 +186,8 @@
       let segmenting = false;
       let lastSegmentationAt = 0;
 
-      let gameRunning = false;
-      let playerVisible = false;
-      let lastPlayerSeenAt = 0;
+      let running = false;
+      let gameOver = false;
 
       let score = 0;
       let health = 3;
@@ -192,30 +196,30 @@
       let lastLaserTime = 0;
 
       /*
-        Keep this interval modest. Increasing it to 125 makes slower
-        phones work more easily; reducing it to 60 makes the mask update
-        more often on faster devices.
+        A body mask is updated roughly 10 times per second.
+        Game drawing and laser animation continue at browser frame rate.
       */
       const segmentationEveryMs = 100;
 
       /*
-        The binary mask has a fully opaque green foreground. Count at
-        least this many person pixels to consider the player visible.
-
-        This deliberately stays low: it is only protecting against
-        an empty mask, not imposing a body-size requirement.
+        Ignore only tiny noise patches. This does NOT prevent lasers
+        from spawning; it only prevents noise from causing damage.
       */
       const minimumPersonPixels = 120;
 
       /*
-        Keep the last mask active for this long following a segmentation
-        miss. It prevents small temporary detection flicker.
+        Keep the last usable body mask briefly when an inference frame
+        has no body result, avoiding collision flicker.
       */
-      const playerGraceMs = 1000;
+      const playerGraceMs = 900;
+
+      let playerVisible = false;
+      let lastPlayerSeenAt = 0;
 
       /*
-        Mask data used for collision.
-        `1` means person, `0` means background.
+        Collision mask:
+        pixels[index] === 1 means detected person
+        pixels[index] === 0 means background
       */
       const playerMask = {
         pixels: null,
@@ -249,11 +253,14 @@
       function resetGame() {
         score = 0;
         health = 3;
+
         laser = null;
         lastLaserTime = performance.now();
 
-        playerVisible = false;
+        lastSegmentationAt = 0;
         lastPlayerSeenAt = 0;
+
+        gameOver = false;
 
         clearMask();
         updateHud();
@@ -263,20 +270,26 @@
         scoreElement.textContent = `Score: ${score}`;
         healthElement.textContent = `Health: ${health}`;
 
+        if (gameOver) {
+          statusElement.textContent =
+            "Game over — refresh to play again.";
+          return;
+        }
+
         if (!segmenter) {
           statusElement.textContent =
-            "Loading person detection…";
+            "Lasers active — loading body collision…";
           return;
         }
 
         if (!playerVisible) {
           statusElement.textContent =
-            "Step into view — lasers are off.";
+            "Lasers active — body collision unavailable.";
           return;
         }
 
         statusElement.textContent =
-          "Person detected — dodge the laser.";
+          "Lasers active — body collision enabled.";
       }
 
       function showError(error) {
@@ -290,13 +303,13 @@
             "Camera access requires HTTPS. Open the GitHub Pages website, not a local file.";
         } else if (error?.name === "NotAllowedError") {
           permissionMessage.textContent =
-            "Camera permission was denied. Allow it in your browser site settings, then try again.";
+            "Camera permission was denied. Allow it in browser site settings, then try again.";
         } else if (error?.name === "NotFoundError") {
           permissionMessage.textContent =
             "No camera was found.";
         } else if (error?.name === "NotReadableError") {
           permissionMessage.textContent =
-            "Another app or tab is already using the camera.";
+            "Another app or browser tab is using the camera.";
         } else {
           permissionMessage.textContent =
             `Camera error: ${error?.message || "Unknown error"}`;
@@ -311,7 +324,7 @@
           allowCameraButton.textContent = "Requesting Camera…";
 
           /*
-            Camera request stays directly inside a real click handler.
+            Browser permission request, initiated directly by a click.
           */
           stream = await navigator.mediaDevices.getUserMedia({
             video: true,
@@ -321,17 +334,21 @@
           video.srcObject = stream;
           await video.play();
 
-          permissionPanel.classList.add("hidden");
-
           resetGame();
 
-          statusElement.textContent =
-            "Loading TensorFlow person detection…";
+          permissionPanel.classList.add("hidden");
 
-          gameRunning = true;
+          statusElement.textContent =
+            "Lasers active — loading body collision…";
+
+          running = true;
           requestAnimationFrame(loop);
 
-          await loadSegmenter();
+          /*
+            Do not await TensorFlow here. The game has already started,
+            so an unavailable model cannot block lasers.
+          */
+          loadSegmenter();
 
         } catch (error) {
           showError(error);
@@ -339,39 +356,42 @@
       }
 
       async function loadSegmenter() {
-        if (segmenter) {
-          return;
-        }
-
-        if (!window.tf || !window.bodySegmentation) {
-          throw new Error(
-            "TensorFlow.js did not load. Check your connection and reload."
-          );
-        }
-
-        await tf.setBackend("webgl");
-        await tf.ready();
-
-        segmenter = await bodySegmentation.createSegmenter(
-          bodySegmentation.SupportedModels
-            .MediaPipeSelfieSegmentation,
-          {
-            runtime: "tfjs",
-            modelType: "general"
+        try {
+          if (!window.tf || !window.bodySegmentation) {
+            throw new Error(
+              "TensorFlow.js did not load. Check your connection and reload."
+            );
           }
-        );
 
-        updateHud();
+          await tf.setBackend("webgl");
+          await tf.ready();
+
+          segmenter = await bodySegmentation.createSegmenter(
+            bodySegmentation.SupportedModels
+              .MediaPipeSelfieSegmentation,
+            {
+              runtime: "tfjs",
+              modelType: "general"
+            }
+          );
+
+        } catch (error) {
+          console.warn("Body collision is unavailable:", error);
+
+          /*
+            The game intentionally remains playable. It just cannot
+            register player hits without a usable segmentation mask.
+          */
+          segmenter = null;
+
+        } finally {
+          updateHud();
+        }
       }
 
       /*
-        Convert ImageData produced by bodySegmentation.toBinaryMask()
-        into:
-        - a screen-mirrored collision mask
-        - a translucent green visual silhouette
-
-        Foreground pixels are green and opaque; background pixels are
-        transparent. We only check alpha here.
+        Convert the package's binary-mask ImageData into a mirrored
+        body-collision mask and a green visual silhouette.
       */
       function storeBinaryMask(binaryMaskImageData) {
         const width = binaryMaskImageData.width;
@@ -379,7 +399,9 @@
         const source = binaryMaskImageData.data;
 
         const pixels = new Uint8Array(width * height);
-        const visual = new Uint8ClampedArray(width * height * 4);
+        const visual = new Uint8ClampedArray(
+          width * height * 4
+        );
 
         let personPixelCount = 0;
 
@@ -388,18 +410,17 @@
             const sourceIndex = y * width + x;
             const sourceRgbaIndex = sourceIndex * 4;
 
-            const alpha = source[sourceRgbaIndex + 3];
-
             /*
-              toBinaryMask writes transparent background and opaque
-              foreground. Alpha above 0 therefore means person.
+              toBinaryMask produces transparent background and opaque
+              foreground. Non-zero alpha therefore means person.
             */
-            if (alpha === 0) {
+            if (source[sourceRgbaIndex + 3] === 0) {
               continue;
             }
 
             /*
-              Mirror mask X to align with CSS-mirrored video.
+              The camera video is CSS-mirrored, so mirror the body mask
+              to keep canvas collision coordinates aligned.
             */
             const mirroredX = width - 1 - x;
             const targetIndex = y * width + mirroredX;
@@ -416,6 +437,10 @@
           }
         }
 
+        /*
+          Again: this is not a laser-start condition. It only means
+          whether the mask is credible enough to cause collision damage.
+        */
         if (personPixelCount < minimumPersonPixels) {
           return false;
         }
@@ -457,9 +482,6 @@
         lastSegmentationAt = timestamp;
 
         try {
-          /*
-            Ask TensorFlow for a person/background segmentation.
-          */
           const people = await segmenter.segmentPeople(
             video,
             {
@@ -469,10 +491,6 @@
             }
           );
 
-          /*
-            Convert the segmentation list through the official utility.
-            Foreground is opaque green; background is transparent.
-          */
           const binaryMask =
             await bodySegmentation.toBinaryMask(
               people,
@@ -492,11 +510,13 @@
               0.5
             );
 
-          const detected = storeBinaryMask(binaryMask);
+          const detected =
+            storeBinaryMask(binaryMask);
 
           if (detected) {
             playerVisible = true;
             lastPlayerSeenAt = timestamp;
+
           } else if (
             timestamp - lastPlayerSeenAt >
             playerGraceMs
@@ -512,11 +532,11 @@
         }
       }
 
+      /*
+        This function has no person check. Lasers spawn whether
+        TensorFlow detects a person or not.
+      */
       function spawnLaser(timestamp) {
-        if (!playerVisible) {
-          return;
-        }
-
         const horizontal = Math.random() > 0.5;
 
         laser = {
@@ -524,10 +544,16 @@
           position: horizontal
             ? 70 +
               Math.random() *
-              Math.max(80, window.innerHeight - 140)
+              Math.max(
+                80,
+                window.innerHeight - 140
+              )
             : 70 +
               Math.random() *
-              Math.max(80, window.innerWidth - 140),
+              Math.max(
+                80,
+                window.innerWidth - 140
+              ),
           createdAt: timestamp,
           warningMs: 900,
           activeMs: 850,
@@ -537,11 +563,12 @@
         };
       }
 
+      /*
+        This function has no person check at its top. Laser timing and
+        drawing continue whether body segmentation works or not.
+      */
       function updateLaser(timestamp) {
-        /*
-          No segmentation mask means no laser damage.
-        */
-        if (!playerVisible) {
+        if (health <= 0) {
           return;
         }
 
@@ -559,6 +586,10 @@
           laser.active = true;
         }
 
+        /*
+          The laser can only hurt someone if a real collision mask
+          currently exists and the beam overlaps it.
+        */
         if (
           laser.active &&
           !laser.hit &&
@@ -566,12 +597,6 @@
         ) {
           laser.hit = true;
           health -= 1;
-
-          if (health <= 0) {
-            gameRunning = false;
-            statusElement.textContent =
-              `Game over — final score: ${score}. Refresh to play again.`;
-          }
         }
 
         if (elapsed >= laser.warningMs + laser.activeMs) {
@@ -620,6 +645,14 @@
       }
 
       function laserHitsPerson(currentLaser) {
+        /*
+          No mask means false. This protects the player from damage
+          without stopping the laser game itself.
+        */
+        if (!playerVisible || !playerMask.pixels) {
+          return false;
+        }
+
         const step = 8;
         const halfThickness =
           currentLaser.thickness / 2;
@@ -674,10 +707,7 @@
       }
 
       function drawMask() {
-        if (
-          !playerVisible ||
-          !playerMask.pixels
-        ) {
+        if (!playerVisible || !playerMask.pixels) {
           return;
         }
 
@@ -715,7 +745,10 @@
           const opacity =
             0.30 +
             0.40 *
-            Math.min(1, elapsed / laser.warningMs);
+            Math.min(
+              1,
+              elapsed / laser.warningMs
+            );
 
           ctx.strokeStyle =
             `rgba(255, 92, 92, ${opacity})`;
@@ -765,36 +798,6 @@
         ctx.restore();
       }
 
-      function drawWaitingMessage() {
-        if (playerVisible) {
-          return;
-        }
-
-        ctx.save();
-
-        ctx.fillStyle = "rgba(0, 0, 0, 0.48)";
-        ctx.fillRect(
-          0,
-          window.innerHeight - 70,
-          window.innerWidth,
-          70
-        );
-
-        ctx.fillStyle = "#ffe66d";
-        ctx.font = "bold 16px Arial";
-        ctx.textAlign = "center";
-
-        ctx.fillText(
-          segmenter
-            ? "STEP INTO VIEW — LASERS ARE OFF"
-            : "LOADING PERSON DETECTION…",
-          window.innerWidth / 2,
-          window.innerHeight - 30
-        );
-
-        ctx.restore();
-      }
-
       function drawGameOver() {
         if (health > 0) {
           return;
@@ -802,7 +805,7 @@
 
         ctx.save();
 
-        ctx.fillStyle = "rgba(0, 0, 0, 0.70)";
+        ctx.fillStyle = "rgba(0, 0, 0, 0.72)";
         ctx.fillRect(
           0,
           0,
@@ -850,14 +853,11 @@
 
         drawMask();
         drawLaser();
-        drawWaitingMessage();
         drawGameOver();
       }
 
       function loop(timestamp) {
-        if (!gameRunning) {
-          draw();
-          updateHud();
+        if (!running) {
           return;
         }
 
